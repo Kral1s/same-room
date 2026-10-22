@@ -1,2 +1,7 @@
+# workspace secrets & tooling — never commit these
+.github_token
+.push-to-github.sh
+
+# OS junk
 .DS_Store
 Thumbs.db
