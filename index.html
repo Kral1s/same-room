@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Same Room</title>
+<style>
+  /* Letterboxed, centered canvas. The JS sizes the canvas to fit the window
+     while keeping the 16:9 aspect ratio. */
+  html, body { margin: 0; padding: 0; height: 100%; background: #0a0b10; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; background: #14161f; box-shadow: 0 0 80px rgba(0, 0, 0, 0.55); }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+<script>
+'use strict';
+
+/* ============================================================================
+   SAME ROOM — Step 1
+   ----------------------------------------------------------------------------
+   One-room puzzle-platformer. Plain HTML + JS + Canvas 2D. No libraries.
+
+   Section order:
+     CONFIG ......... constants, palette, physics tuning
+     INPUT .......... keyboard state
+     LEVEL DATA ..... ASCII levels + parsing
+     PLAYER/PHYSICS . movement, collisions, hazards, particles
+     RENDERING ...... all drawing
+     GAME STATE ..... Game object, level loading, narrator, extension points
+     MAIN LOOP ...... fixed-timestep loop
+
+   EXTENSION POINTS already in place for later steps (not implemented yet):
+     - level.rules / Game.activeRules ... per-level rule modifiers
+     - PathRecorder ..................... per-attempt path recording
+     - Game.ghost ....................... ghost entity of the previous run
+     - Narrator.lineFor() ............... contextual narrator lines
+   ========================================================================== */
+
+/* ============================== CONFIG =================================== */
+
+const TILE = 40;
+const COLS = 32;
+const ROWS = 18;
+const VIEW_W = COLS * TILE;   // 1280 logical canvas width
+const VIEW_H = ROWS * TILE;   // 720  logical canvas height
+
+const TOTAL_LEVELS = 30;      // the game concept is 30 rooms; only 1 exists yet
+
+const STEP_MS = 1000 / 60;    // fixed timestep: 60 updates per second
+const MAX_STEPS = 5;          // cap physics steps per frame (anti death-spiral)
+
+const COLORS = {
+  bg:     '#14161f',
+  wall:   '#2b2f45',
+  player: '#f2f2f2',
+  door:   '#4cc9a7',
+  danger: '#ff4d5e',
+  text:   '#cfd3e6',
+};
+
+// Platformer feel. Units: pixels and frames (1 frame = 1/60 s).
+const PHYS = {
+  gravity:      0.55,   // added to vy every frame
+  maxFall:      12,     // terminal fall speed
+  runSpeed:     4.0,    // max horizontal speed
+  accelGround:  0.7,
+  accelAir:     0.5,
+  decelGround:  0.9,    // friction when no input (ground)
+  decelAir:     0.25,   // friction when no input (air)
+  jumpVel:      -13.0,  // initial jump velocity (~3.8 tiles high)
+  jumpCut:      0.45,   // vy multiplied by this when jump released early
+  coyoteFrames: 6,      // can still jump this long after leaving a ledge
+  bufferFrames: 6,      // jump pressed this long before landing still jumps
+};
+
+const PLAYER_W = 28;
+const PLAYER_H = 28;
+
+// Spike hitbox is shrunk relative to its tile so deaths feel fair.
+const SPIKE_INSET_X = 6;
+const SPIKE_INSET_TOP = 14;
+
+const DEATH_FREEZE_FRAMES = 8;   // brief hitstop after dying (~130 ms)
+const FLASH_FRAMES = 10;         // red screen flash after dying
+const COMPLETE_FRAMES = 90;      // length of the "level complete" transition
+
+/* ============================== INPUT ==================================== */
+
+const Input = {
+  left: false,
+  right: false,
+  jumpHeld: false,
+  jumpPressed: false,    // true for exactly one update (edge)
+  jumpReleased: false,   // true for exactly one update (edge)
+  restartPressed: false, // true for exactly one update (edge)
+};
+
+const JUMP_CODES = ['ArrowUp', 'KeyW', 'Space'];
+
+function onKeyDown(e) {
+  if (e.repeat) return;
+  switch (e.code) {
+    case 'ArrowLeft':  case 'KeyA': Input.left = true; break;
+    case 'ArrowRight': case 'KeyD': Input.right = true; break;
+    default:
+      if (JUMP_CODES.includes(e.code)) {
+        if (!Input.jumpHeld) Input.jumpPressed = true;
+        Input.jumpHeld = true;
+      } else if (e.code === 'KeyR') {
+        Input.restartPressed = true;
+      } else {
+        return; // not a game key: don't preventDefault
+      }
+  }
+  e.preventDefault();
+}
+
+function onKeyUp(e) {
+  switch (e.code) {
+    case 'ArrowLeft':  case 'KeyA': Input.left = false; break;
+    case 'ArrowRight': case 'KeyD': Input.right = false; break;
+    default:
+      if (JUMP_CODES.includes(e.code)) {
+        // only count a release when every jump key is up
+        Input.jumpHeld = false;
+        Input.jumpReleased = true;
+      } else {
+        return;
+      }
+  }
+  e.preventDefault();
+}
+
+window.addEventListener('keydown', onKeyDown);
+window.addEventListener('keyup', onKeyUp);
+// dropping window focus clears held keys so the player never "sticks"
+window.addEventListener('blur', () => {
+  Input.left = Input.right = Input.jumpHeld = false;
+});
+
+/* ============================ LEVEL DATA ================================= */
+/* Legend: '#' wall   '^' spike   '.' empty   'P' player start   'D' exit    */
+
+const LEVELS = [
+  {
+    name: 'First Steps',
+    narrator: "Ah, a guest. The exit is up there. The spikes are decorative. Probably.",
+    rules: [], // EXTENSION POINT: rule modifiers for this room go here later
+    grid: [
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..........................D...#",
+      "#........................#####.#",
+      "#..............................#",
+      "#...................#####......#",
+      "#..............................#",
+      "#..............................#",
+      "#.............#####............#",
+      "#..............................#",
+      "#..............................#",
+      "#.......#####..................#",
+      "#..............................#",
+      "#..P..........^^...............#",
+      "################################",
+    ],
+  },
+];
+
+// Finds 'P' and 'D' in a grid. Spawn is pixel coords (standing in the P tile).
+function parseLevelGrid(grid) {
+  let spawn = null;
+  let door = null;
+  for (let ty = 0; ty < ROWS; ty++) {
+    for (let tx = 0; tx < COLS; tx++) {
+      const c = grid[ty][tx];
+      if (c === 'P') {
+        spawn = {
+          x: tx * TILE + (TILE - PLAYER_W) / 2,
+          y: (ty + 1) * TILE - PLAYER_H,
+        };
+      } else if (c === 'D') {
+        door = { tx, ty };
+      }
+    }
+  }
+  if (!spawn || !door) console.warn('Level is missing a P or D tile.');
+  return { spawn, door };
+}
+
+/* ========================== PLAYER / PHYSICS ============================= */
+
+const player = {
+  x: 0, y: 0, w: PLAYER_W, h: PLAYER_H,
+  vx: 0, vy: 0,
+  onGround: false,
+  coyote: 0,       // frames of coyote time remaining
+  jumpBuffer: 0,   // frames of buffered jump remaining
+  facing: 1,
+};
+
+let particles = [];  // death-burst squares (and any future effects)
+
+function approach(v, target, amount) {
+  return v < target ? Math.min(v + amount, target)
+                    : Math.max(v - amount, target);
+}
+
+function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+function tileChar(tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return '#'; // outside = solid
+  return Game.level.tiles[ty][tx];
+}
+
+function isSolid(tx, ty) {
+  return tileChar(tx, ty) === '#';
+}
+
+// Runs cb(tx, ty) for every tile overlapped by the player's AABB.
+function forEachOverlappedTile(cb) {
+  const x0 = Math.floor(player.x / TILE);
+  const x1 = Math.floor((player.x + player.w - 0.001) / TILE);
+  const y0 = Math.floor(player.y / TILE);
+  const y1 = Math.floor((player.y + player.h - 0.001) / TILE);
+  for (let ty = y0; ty <= y1; ty++)
+    for (let tx = x0; tx <= x1; tx++)
+      cb(tx, ty);
+}
+
+// Axis-separated AABB collision. Because max speed (12) < tile size (40),
+// moving one axis at a time can never tunnel through the tile grid.
+function collideX() {
+  const p = player;
+  const dir = Math.sign(p.vx);
+  if (dir === 0) return;
+  if (dir > 0) {
+    let nx = p.x, hit = false;
+    forEachOverlappedTile((tx, ty) => {
+      if (isSolid(tx, ty)) { nx = Math.min(nx, tx * TILE - p.w - 0.001); hit = true; }
+    });
+    if (hit) { p.x = nx; p.vx = 0; }
+  } else {
+    let nx = p.x, hit = false;
+    forEachOverlappedTile((tx, ty) => {
+      if (isSolid(tx, ty)) { nx = Math.max(nx, (tx + 1) * TILE + 0.001); hit = true; }
+    });
+    if (hit) { p.x = nx; p.vx = 0; }
+  }
+}
+
+function collideY() {
+  const p = player;
+  const dir = Math.sign(p.vy);
+  if (dir === 0) return;
+  if (dir > 0) {
+    let ny = p.y, hit = false;
+    forEachOverlappedTile((tx, ty) => {
+      if (isSolid(tx, ty)) { ny = Math.min(ny, ty * TILE - p.h - 0.001); hit = true; }
+    });
+    if (hit) { p.y = ny; p.vy = 0; p.onGround = true; }
+  } else {
+    let ny = p.y, hit = false;
+    forEachOverlappedTile((tx, ty) => {
+      if (isSolid(tx, ty)) { ny = Math.max(ny, (ty + 1) * TILE + 0.001); hit = true; }
+    });
+    if (hit) { p.y = ny; p.vy = 0; } // bumped head
+  }
+}
+
+function resetPlayerToSpawn() {
+  const s = Game.level.spawn;
+  player.x = s.x; player.y = s.y;
+  player.vx = 0; player.vy = 0;
+  player.onGround = false;
+  player.coyote = 0; player.jumpBuffer = 0;
+  player.facing = 1;
+}
+
+function spawnDeathBurst(cx, cy) {
+  for (let i = 0; i < 18; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 1 + Math.random() * 4;
+    particles.push({
+      x: cx, y: cy,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 1.5,
+      size: 3 + Math.random() * 4,
+      life: 35 + Math.random() * 15,
+      maxLife: 50,
+      color: Math.random() < 0.5 ? COLORS.player : COLORS.danger,
+    });
+  }
+}
+
+function updateParticles() {
+  for (const q of particles) {
+    q.vy += 0.18;
+    q.x += q.vx;
+    q.y += q.vy;
+    q.life--;
+  }
+  particles = particles.filter(q => q.life > 0);
+}
+
+function updatePlayer() {
+  const p = player;
+
+  // --- horizontal input: accelerate / friction ---
+  const dir = (Input.right ? 1 : 0) - (Input.left ? 1 : 0);
+  if (dir !== 0) {
+    p.vx += dir * (p.onGround ? PHYS.accelGround : PHYS.accelAir);
+    p.vx = Math.max(-PHYS.runSpeed, Math.min(PHYS.runSpeed, p.vx));
+    p.facing = dir;
+  } else {
+    p.vx = approach(p.vx, 0, p.onGround ? PHYS.decelGround : PHYS.decelAir);
+  }
+
+  // --- coyote time & jump buffering ---
+  if (p.onGround) p.coyote = PHYS.coyoteFrames;
+  else if (p.coyote > 0) p.coyote--;
+
+  if (Input.jumpPressed) p.jumpBuffer = PHYS.bufferFrames;
+  else if (p.jumpBuffer > 0) p.jumpBuffer--;
+
+  if (p.jumpBuffer > 0 && p.coyote > 0) {
+    p.vy = PHYS.jumpVel;
+    p.onGround = false;
+    p.coyote = 0;
+    p.jumpBuffer = 0;
+  }
+
+  // --- variable jump height: early release shortens the jump ---
+  if (Input.jumpReleased && p.vy < 0) p.vy *= PHYS.jumpCut;
+
+  // --- gravity with terminal velocity ---
+  p.vy += PHYS.gravity;
+  if (p.vy > PHYS.maxFall) p.vy = PHYS.maxFall;
+
+  // --- integrate, one axis at a time ---
+  p.x += p.vx;
+  collideX();
+  p.y += p.vy;
+  p.onGround = false; // re-detected by collideY if we actually land
+  collideY();
+
+  // EXTENSION POINT: PathRecorder.sample(player) — record this frame's
+  // position for ghosts / path-based rules (added in a later step).
+
+  // --- hazards ---
+  forEachOverlappedTile((tx, ty) => {
+    if (tileChar(tx, ty) !== '^') return;
+    // fair, shrunken spike hitbox
+    if (rectsOverlap(p.x, p.y, p.w, p.h,
+                     tx * TILE + SPIKE_INSET_X, ty * TILE + SPIKE_INSET_TOP,
+                     TILE - SPIKE_INSET_X * 2, TILE - SPIKE_INSET_TOP)) {
+      onPlayerDeath();
+    }
+  });
+
+  // --- goal ---
+  if (Game.state !== 'playing') return; // died this frame
+  forEachOverlappedTile((tx, ty) => {
+    if (tileChar(tx, ty) === 'D' && Game.state === 'playing') onPlayerWin();
+  });
+}
+
+/* ============================= RENDERING ================================= */
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Scale the canvas with CSS to fit the window, keeping 16:9 (letterboxed).
+function fitCanvas() {
+  const s = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
+  canvas.style.width = Math.floor(VIEW_W * s) + 'px';
+  canvas.style.height = Math.floor(VIEW_H * s) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+function drawText(str, x, y, font, align, alpha) {
+  ctx.globalAlpha = (alpha === undefined ? 1 : alpha);
+  ctx.font = font;
+  ctx.textAlign = align;
+  ctx.fillStyle = COLORS.text;
+  ctx.fillText(str, x, y);
+  ctx.globalAlpha = 1;
+}
+
+function drawRoom() {
+  const tiles = Game.level.tiles;
+  ctx.fillStyle = COLORS.wall;
+  for (let ty = 0; ty < ROWS; ty++)
+    for (let tx = 0; tx < COLS; tx++)
+      if (tiles[ty][tx] === '#')
+        ctx.fillRect(tx * TILE, ty * TILE, TILE, TILE);
+}
+
+function drawSpikes() {
+  const tiles = Game.level.tiles;
+  ctx.fillStyle = COLORS.danger;
+  for (let ty = 0; ty < ROWS; ty++) {
+    for (let tx = 0; tx < COLS; tx++) {
+      if (tiles[ty][tx] !== '^') continue;
+      const x = tx * TILE, y = ty * TILE;
+      ctx.beginPath();
+      ctx.moveTo(x,      y + TILE); ctx.lineTo(x + 10, y + 10); ctx.lineTo(x + 20, y + TILE);
+      ctx.moveTo(x + 20, y + TILE); ctx.lineTo(x + 30, y + 10); ctx.lineTo(x + 40, y + TILE);
+      ctx.fill();
+    }
+  }
+}
+
+function drawDoor() {
+  const d = Game.level.door;
+  const x = d.tx * TILE, y = d.ty * TILE;
+  ctx.fillStyle = COLORS.door;
+  ctx.fillRect(x + 6, y + 6, TILE - 12, TILE - 6);   // sits on tile bottom
+  ctx.fillStyle = COLORS.bg;
+  ctx.beginPath();
+  ctx.arc(x + TILE - 13, y + 24, 2.5, 0, Math.PI * 2); // knob
+  ctx.fill();
+}
+
+function drawPlayer() {
+  ctx.fillStyle = COLORS.player;
+  ctx.fillRect(Math.round(player.x), Math.round(player.y), player.w, player.h);
+}
+
+function drawParticles() {
+  for (const q of particles) {
+    ctx.globalAlpha = Math.max(0, q.life / q.maxLife);
+    ctx.fillStyle = q.color;
+    ctx.fillRect(q.x - q.size / 2, q.y - q.size / 2, q.size, q.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  drawText('Room ' + (Game.levelIndex + 1) + ' / ' + TOTAL_LEVELS,
+           24, 36, '600 17px system-ui, sans-serif', 'left');
+  drawText('Deaths: ' + Game.deaths,
+           VIEW_W - 24, 36, '600 17px system-ui, sans-serif', 'right');
+  if (Game.state === 'playing') {
+    drawText(Narrator.current, VIEW_W / 2, VIEW_H - 22,
+             'italic 17px Georgia, serif', 'center', 0.9);
+  }
+}
+
+function drawCompleteOverlay() {
+  const a = Math.min(1, Game.stateTime / 15); // fade in
+  ctx.fillStyle = COLORS.bg;
+  ctx.globalAlpha = 0.72 * a;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.globalAlpha = 1;
+  drawText('ROOM COMPLETE', VIEW_W / 2, VIEW_H / 2 - 8,
+           '700 42px system-ui, sans-serif', 'center', a);
+  drawText('The room makes a note of that.', VIEW_W / 2, VIEW_H / 2 + 30,
+           'italic 17px Georgia, serif', 'center', a);
+}
+
+function drawEndScreen() {
+  const t = Game.stateTime;
+  drawText('To be continued...', VIEW_W / 2, VIEW_H / 2 - 40,
+           '700 46px system-ui, sans-serif', 'center');
+  drawText('The room is thinking about what to do to you next.',
+           VIEW_W / 2, VIEW_H / 2, 'italic 17px Georgia, serif', 'center', 0.9);
+  drawText('Deaths this run: ' + Game.deaths,
+           VIEW_W / 2, VIEW_H / 2 + 54, '600 17px system-ui, sans-serif', 'center');
+  const pulse = 0.55 + 0.35 * Math.sin(t * 0.08);
+  drawText('Press R to play again',
+           VIEW_W / 2, VIEW_H / 2 + 100, '600 17px system-ui, sans-serif', 'center', pulse);
+}
+
+function drawFlash() {
+  if (Game.flash <= 0) return;
+  ctx.globalAlpha = (Game.flash / FLASH_FRAMES) * 0.22;
+  ctx.fillStyle = COLORS.danger;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  if (Game.state === 'end') {
+    drawEndScreen();
+    return;
+  }
+  drawRoom();
+  drawSpikes();
+  drawDoor();
+  drawParticles();
+  drawPlayer();
+  // EXTENSION POINT: draw Game.ghost here in a later step.
+  drawHUD();
+  if (Game.state === 'complete') drawCompleteOverlay();
+  drawFlash();
+}
+
+/* ============================ GAME STATE ================================= */
+/* The Game object is the single source of truth. Later steps add fields
+   here (e.g. active rules, the recorded path, the ghost).                  */
+
+const Game = {
+  state: 'playing',     // 'playing' | 'complete' | 'end'
+  levelIndex: 0,
+  deaths: 0,            // total deaths this run (HUD counter)
+  attempt: 1,           // attempt number in the current room
+  stateTime: 0,         // frames spent in the current state
+  freeze: 0,            // hitstop frames after a death
+  flash: 0,             // red flash frames after a death
+  level: null,          // parsed current level: {name, tiles, spawn, door, rules}
+  activeRules: [],      // EXTENSION POINT: live rule instances (later steps)
+  ghost: null,          // EXTENSION POINT: ghost of the previous run (later)
+};
+
+// EXTENSION POINT — narrator system. For now it just returns the level's own
+// line; later it can pick lines based on context (deaths, rules, wins).
+const Narrator = {
+  current: '',
+  lineFor(levelIndex, context) {
+    return LEVELS[levelIndex].narrator;
+  },
+};
+
+// EXTENSION POINT — per-attempt path recording (used later for ghosts and
+// path-based rules). Stubbed for now: begin/end/sample are called at the
+// right places but intentionally do nothing yet.
+const PathRecorder = {
+  samples: [],
+  begin()  { this.samples = []; },
+  sample() { /* later step: push {x, y, facing} each frame */ },
+  end()    { return this.samples; },
+};
+
+function setState(s) {
+  Game.state = s;
+  Game.stateTime = 0;
+}
+
+function loadLevel(index) {
+  const def = LEVELS[index];
+  const parsed = parseLevelGrid(def.grid);
+  Game.levelIndex = index;
+  Game.level = {
+    name: def.name,
+    tiles: def.grid.slice(),
+    spawn: parsed.spawn,
+    door: parsed.door,
+    rules: def.rules,
+  };
+  Game.activeRules = def.rules.slice(); // rules will hook in here later
+  Game.ghost = null;
+  Game.freeze = 0;
+  Game.flash = 0;
+  particles = [];
+  Narrator.current = Narrator.lineFor(index, Game);
+  resetPlayerToSpawn();
+  PathRecorder.begin();
+  setState('playing');
+}
+
+// Back to the spawn point. died=true counts a death + effects; died=false is
+// a manual restart (R) with no death penalty.
+function restartAttempt(died) {
+  PathRecorder.end();
+  if (died) {
+    Game.deaths++;
+    Game.flash = FLASH_FRAMES;
+    Game.freeze = DEATH_FREEZE_FRAMES;
+    spawnDeathBurst(player.x + player.w / 2, player.y + player.h / 2);
+  }
+  resetPlayerToSpawn();
+  Game.attempt++;
+  PathRecorder.begin();
+}
+
+function onPlayerDeath() {
+  restartAttempt(true);
+}
+
+function onPlayerWin() {
+  PathRecorder.end();
+  setState('complete');
+}
+
+function resetRun() {
+  Game.deaths = 0;
+  Game.attempt = 1;
+  loadLevel(0);
+}
+
+// One fixed update (1/60 s).
+function update() {
+  Game.stateTime++;
+  if (Game.flash > 0) Game.flash--;
+
+  // R: restart attempt while playing, restart the whole run on the end screen
+  if (Input.restartPressed) {
+    if (Game.state === 'playing') restartAttempt(false);
+    else if (Game.state === 'end') resetRun();
+  }
+
+  switch (Game.state) {
+    case 'playing':
+      if (Game.freeze > 0) {
+        Game.freeze--; // death hitstop; player is already back at spawn
+      } else {
+        updatePlayer();
+      }
+      break;
+    case 'complete':
+      if (Game.stateTime >= COMPLETE_FRAMES) {
+        if (Game.levelIndex + 1 < LEVELS.length) loadLevel(Game.levelIndex + 1);
+        else setState('end'); // only Room 1 exists so far
+      }
+      break;
+    case 'end':
+      break;
+  }
+
+  updateParticles();
+
+  // one-frame input edges are consumed every update
+  Input.jumpPressed = false;
+  Input.jumpReleased = false;
+  Input.restartPressed = false;
+}
+
+/* ============================= MAIN LOOP ================================= */
+/* Fixed timestep at 60 updates/s: accumulate real elapsed time, run whole
+   steps. Rendering happens once per requestAnimationFrame.                 */
+
+let lastTime = performance.now();
+let accumulator = 0;
+
+function frame(now) {
+  let delta = now - lastTime;
+  lastTime = now;
+  if (delta > 250) delta = 250; // tab was hidden etc.: don't fast-forward
+  accumulator += delta;
+
+  let steps = 0;
+  while (accumulator >= STEP_MS && steps < MAX_STEPS) {
+    update();
+    accumulator -= STEP_MS;
+    steps++;
+  }
+  if (steps === MAX_STEPS) accumulator = 0; // drop leftover time, stay in sync
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+loadLevel(0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
