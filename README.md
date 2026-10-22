@@ -39,3 +39,10 @@ Built in steps. Done so far:
   collision), spikes with instant respawn + particle burst, death counter,
   door win transition, "To be continued..." placeholder, HUD with room number
   and narrator line.
+- **Step 2** — all user-visible text centralized in `STRINGS`, player look in
+  `CONFIG.PLAYER` + `drawPlayer()`, per-attempt path recording
+  (`run.currentPath` / `lastWinPath` / `deathPoints`), a `RULES` registry with
+  lifecycle hooks, two rules (`pathLava`, `mirrorControls`), and Room 2: the
+  same room plus a higher route where your Room 1 path becomes pulsing lava.
+  Debug mode: **F2** toggles path lines/death marks/rule list, **N** skips a
+  level (debug only).
