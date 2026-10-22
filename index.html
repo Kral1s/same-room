@@ -18,12 +18,12 @@
 'use strict';
 
 /* ============================================================================
-   SAME ROOM — Step 2
+   SAME ROOM — Step 3
    ----------------------------------------------------------------------------
    One-room puzzle-platformer. Plain HTML + JS + Canvas 2D. No libraries.
 
    Section order:
-     CONFIG ......... CONFIG object, palette, STRINGS (all user-visible text)
+     CONFIG ......... CONFIG object, act THEMES, STRINGS (all user-visible text)
      INPUT .......... keyboard state
      LEVEL DATA ..... ASCII levels + parsing
      PLAYER/PHYSICS . movement, collisions, hazards, particles, path recording
@@ -32,25 +32,12 @@
      GAME STATE ..... Game object, level loading, narrator, main update
      MAIN LOOP ...... fixed-timestep loop
 
-   Step 2 delivered:
-     - CONFIG.PLAYER (player size/color) + drawPlayer(ctx, player)
-     - STRINGS object: every user-visible string lives there
-     - path recording: Game.run.currentPath / lastWinPath / deathPoints
-     - RULES registry with hooks + rules 'pathLava' and 'mirrorControls'
-     - Level 2: same room + a second, higher route; your L1 path becomes lava
-     - Debug mode: F2 toggles (path lines, death marks, active rules), N skips
+   Level kit so far (act 1):
+     L1 (no rules) · L2 pathLava · L3 buttonGate · L4 shyDoor
+     L5 deathSpike · L6 jumpShift
    ========================================================================== */
 
 /* ============================== CONFIG =================================== */
-
-const COLORS = {
-  bg:     '#14161f',
-  wall:   '#2b2f45',
-  player: '#f2f2f2',
-  door:   '#4cc9a7',
-  danger: '#ff4d5e',
-  text:   '#cfd3e6',
-};
 
 const CONFIG = {
   TILE: 40,
@@ -59,17 +46,31 @@ const CONFIG = {
   VIEW_W: 32 * 40,   // 1280 logical canvas width
   VIEW_H: 18 * 40,   // 720  logical canvas height
 
-  TOTAL_LEVELS: 30,  // the game concept is 30 rooms; 2 exist so far
+  TOTAL_LEVELS: 30,  // the game concept is 30 rooms; 6 exist so far
 
   STEP_MS: 1000 / 60, // fixed timestep: 60 updates per second
   MAX_STEPS: 5,       // cap physics steps per frame (anti death-spiral)
+
+  // Act-based palettes. Levels reference an act via their `act` field.
+  // Act 1 = the original palette. (Later acts will reskin the room.)
+  THEMES: {
+    1: {
+      bg:     '#14161f',
+      wall:   '#2b2f45',
+      player: '#f2f2f2',
+      door:   '#4cc9a7',
+      danger: '#ff4d5e',
+      text:   '#cfd3e6',
+      accent: '#f2c14e',   // interactive things (buttons, highlights)
+    },
+  },
 
   // Player look & hitbox in one place — the sprite will change later,
   // the 28x28 physics hitbox will not.
   PLAYER: {
     width: 28,
     height: 28,
-    color: COLORS.player,
+    color: '#f2f2f2',
   },
 
   // Platformer feel. Units: pixels and frames (1 frame = 1/60 s).
@@ -98,6 +99,9 @@ const CONFIG = {
   PATH_SAMPLE_EVERY: 2,    // record the path every N frames
 
   SPAWN_SAFE_RADIUS: 2,    // lava never appears within this many tiles of spawn
+
+  DEATH_SPIKE_CAP: 4,      // max spikes deathSpike keeps at once (oldest removed)
+  DEATH_SPIKE_SAFE: 3,     // never activate slots within this many tiles of start/door
 };
 
 // short aliases so the rest of the code stays readable
@@ -106,7 +110,11 @@ const {
   PHYS, SPIKE_INSET_X, SPIKE_INSET_TOP,
   DEATH_FREEZE_FRAMES, FLASH_FRAMES, COMPLETE_FRAMES,
   PATH_SAMPLE_EVERY, SPAWN_SAFE_RADIUS,
+  DEATH_SPIKE_CAP, DEATH_SPIKE_SAFE,
 } = CONFIG;
+
+// active act palette (swapped by loadLevel from CONFIG.THEMES[level.act])
+let COLORS = CONFIG.THEMES[1];
 
 /* All user-visible text in one place — edit wording right here.            */
 const STRINGS = {
@@ -124,10 +132,30 @@ const STRINGS = {
     deaths:  (n) => 'Deaths this run: ' + n,
     restart: 'Press R to play again',
   },
-  // narrator lines, referenced by each level's `narrator` key
-  narrator: {
-    room1: 'Ah, a guest. The exit is up there. The spikes are decorative. Probably.',
-    room2: 'Same room. Funny. Try not to walk where you walked.',
+  // narrator lines keyed by level number; `events` holds swap-in lines that
+  // rules request via the level's narratorEvents map (e.g. onButton)
+  levels: {
+    1: {
+      narrator: 'Ah, a guest. The exit is up there. The spikes are decorative. Probably.',
+    },
+    2: {
+      narrator: 'Same room. Funny. Try not to walk where you walked.',
+    },
+    3: {
+      narrator: 'Whatever you do, do NOT touch the button.',
+      events: {
+        onButton: '...I said do not. But sure, go ahead.',
+      },
+    },
+    4: {
+      narrator: "The door is shy. It doesn't like being chased.",
+    },
+    5: {
+      narrator: "I'm adding a little something where you died.",
+    },
+    6: {
+      narrator: 'The room is rotating. Slightly. Please keep jumping.',
+    },
   },
   debug: {
     rules:  (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
@@ -146,6 +174,7 @@ const Input = {
   restartPressed: false, // true for exactly one update (edge)
   debugToggle: false,    // F2 edge: toggles debug mode
   debugSkip: false,      // N edge: skips level (only in debug mode)
+  debugDigit: 0,         // 1..6 edge: jump straight to that level (debug only)
 };
 
 const JUMP_CODES = ['ArrowUp', 'KeyW', 'Space'];
@@ -158,6 +187,12 @@ function onKeyDown(e) {
     case 'KeyR': Input.restartPressed = true; break;
     case 'F2':   Input.debugToggle = true; break;
     case 'KeyN': Input.debugSkip = true; break;
+    case 'Digit1': Input.debugDigit = 1; break;
+    case 'Digit2': Input.debugDigit = 2; break;
+    case 'Digit3': Input.debugDigit = 3; break;
+    case 'Digit4': Input.debugDigit = 4; break;
+    case 'Digit5': Input.debugDigit = 5; break;
+    case 'Digit6': Input.debugDigit = 6; break;
     default:
       if (JUMP_CODES.includes(e.code)) {
         if (!Input.jumpHeld) Input.jumpPressed = true;
@@ -193,13 +228,17 @@ window.addEventListener('blur', () => {
 });
 
 /* ============================ LEVEL DATA ================================= */
-/* Legend: '#' wall   '^' spike   '.' empty   'P' player start   'D' exit
-   Each level: { name, narrator (key into STRINGS.narrator), rules, grid }  */
+/* ASCII legend:
+     '#' wall          '^' spike          '.' empty
+     'P' player start  'D'  exit door (initial position of the dynamic door)
+     'B' button        'G'  gate (solid while closed)
+     'S' spike slot    'M'  movable platform block (initial marker)
+   Levels: { act, name, rules, grid, doorTarget?, shiftLanes?, narratorEvents? } */
 
 const LEVELS = [
   {
+    act: 1,
     name: 'First Steps',
-    narrator: 'room1',
     rules: [], // no modifiers the first time you see the room
     grid: [
       "################################",
@@ -223,8 +262,8 @@ const LEVELS = [
     ],
   },
   {
+    act: 1,
     name: 'Deja Vu',
-    narrator: 'room2',
     rules: ['pathLava'],
     grid: [ // SAME room as level 1, plus a few platforms for a higher route
       "################################",
@@ -247,12 +286,119 @@ const LEVELS = [
       "################################",
     ],
   },
+  {
+    act: 1,
+    name: 'Peer Pressure',
+    rules: ['buttonGate'],
+    narratorEvents: { onButton: 'onButton' }, // event -> STRINGS.levels[3].events key
+    grid: [ // level 1's room, but a gate column seals the door route
+      "################################",
+      "#..............................#",
+      "#.......................G......#",
+      "#.......................G......#",
+      "#.......................G......#",
+      "#.......................G..D...#",
+      "#.......................G#####.#",
+      "#.....................B.G......#",
+      "#...................#####......#",
+      "#..............................#",
+      "#..............................#",
+      "#.............#####............#",
+      "#..............................#",
+      "#..............................#",
+      "#.......#####..................#",
+      "#..............................#",
+      "#..P..........^^...............#",
+      "################################",
+    ],
+  },
+  {
+    act: 1,
+    name: 'Boundary Issues',
+    rules: ['shyDoor'],
+    doorTarget: { col: 4, row: 16 }, // where the door shyly retires to
+    grid: [ // door is on a ledge across a pit far too wide to jump
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..........................D...#",
+      "#........................#####.#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#...#####......................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..P......^^^^^^^^^^^^^........#",
+      "################################",
+    ],
+  },
+  {
+    act: 1,
+    name: 'Souvenirs',
+    rules: ['deathSpike'],
+    grid: [ // a long floor route; S slots sit on the floor, >=4 tiles apart
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#........................#####.#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..P...S..^^..S...S...^.S...D..#",
+      "################################",
+    ],
+  },
+  {
+    act: 1,
+    name: 'Musical Stones',
+    rules: ['jumpShift'],
+    shiftLanes: [{ row: 15, colStart: 10, colEnd: 25 }],
+    grid: [ // a pit of spikes crossed on shifting stepping stones
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#.........MM..MM..MM..MM.......#",
+      "#..P......^^^^^^^^^^^^^^^^..D..#",
+      "################################",
+    ],
+  },
 ];
 
-// Finds 'P' and 'D' in a grid. Spawn is pixel coords (standing in the P tile).
+// Parses a grid into runtime level data (spawn, door tile, special markers).
 function parseLevelGrid(grid) {
   let spawn = null;
   let door = null;
+  const buttons = [];    // 'B' tiles
+  const gateTiles = [];  // 'G' tiles
+  const sSlots = [];     // 'S' tiles (potential spike slots)
+  const mTiles = [];     // 'M' initial positions
   for (let ty = 0; ty < ROWS; ty++) {
     for (let tx = 0; tx < COLS; tx++) {
       const c = grid[ty][tx];
@@ -263,6 +409,14 @@ function parseLevelGrid(grid) {
         };
       } else if (c === 'D') {
         door = { tx, ty };
+      } else if (c === 'B') {
+        buttons.push({ tx, ty });
+      } else if (c === 'G') {
+        gateTiles.push({ tx, ty });
+      } else if (c === 'S') {
+        sSlots.push({ tx, ty });
+      } else if (c === 'M') {
+        mTiles.push({ tx, ty });
       }
     }
   }
@@ -270,7 +424,7 @@ function parseLevelGrid(grid) {
   const spawnTile = spawn
     ? { col: Math.floor(spawn.x / TILE), row: Math.floor(spawn.y / TILE) }
     : null;
-  return { spawn, door, spawnTile };
+  return { spawn, door, spawnTile, buttons, gateTiles, sSlots, mTiles };
 }
 
 /* ========================== PLAYER / PHYSICS ============================= */
@@ -301,7 +455,11 @@ function tileChar(tx, ty) {
 }
 
 function isSolid(tx, ty) {
-  return tileChar(tx, ty) === '#';
+  const c = tileChar(tx, ty);
+  if (c === '#') return true;
+  if (c === 'G') return Game.gatesClosed;      // gates are solid while closed
+  // 'M' markers in the grid are just spawn points; real positions are dynamic
+  return Game.mSolid.has(tx + ',' + ty);
 }
 
 // Runs cb(tx, ty) for every tile overlapped by the player's AABB.
@@ -455,6 +613,7 @@ function updatePlayer(eff) {
     p.onGround = false;
     p.coyote = 0;
     p.jumpBuffer = 0;
+    Game.justJumped = true; // rules (jumpShift) listen for this
   }
 
   // --- variable jump height: early release shortens the jump ---
@@ -485,7 +644,7 @@ function updatePlayer(eff) {
     }
   });
 
-  // dynamic hazard layer (lava etc.), separate from the ASCII grid
+  // dynamic hazard layer (lava, added spikes, ...), separate from the grid
   if (!dead) {
     forEachOverlappedTile((tx, ty) => {
       if (dead || !Game.hazards.has(tx + ',' + ty)) return;
@@ -494,33 +653,33 @@ function updatePlayer(eff) {
     });
   }
 
-  // --- goal ---
+  // --- goal: the dynamic door at its CURRENT position ---
   if (!dead) {
-    let won = false;
-    forEachOverlappedTile((tx, ty) => {
-      if (!won && tileChar(tx, ty) === 'D') { won = true; onPlayerWin(); }
-    });
+    const d = Game.door;
+    if (rectsOverlap(p.x, p.y, p.w, p.h, d.x, d.y, d.w, d.h)) onPlayerWin();
   }
 }
 
 /* =============================== RULES =================================== */
 /* Registry of gameplay modifiers. A level lists rule ids in its `rules`
    array; every hook is optional:
-     onLevelStart(game)      after the level (and hazards) reset
+     onLevelStart(game)      after the level (and all rule state) reset
+     onAttemptStart(game)    on level load AND on every respawn/restart
      onUpdate(game)          each fixed update while playing
      modifyInput(input,game) transforms {left,right,jumpHeld} before physics
      onDraw(ctx,game)        draw world-layer effects (under the player)
-     onDeath(game)           after a death is recorded, before respawn
+     onDeath(game)           after the death point is recorded, before respawn
      onWin(game)             after lastWinPath is saved, before transition
-   New rule later = one entry here + its id in a level's rules array.       */
+   New rule later = one entry here + its id in a level's rules array.
+   Per-level rule state lives in game.ruleVars.<ruleId> (reset on load).    */
 
 const RULES = {
-  // Your previous winning path turns into lava.
+  /* Your previous winning path turns into lava. */
   pathLava: {
     onLevelStart(game) {
       const path = game.run.lastWinPath;
       if (!path || !path.length) return;
-      const door = game.level.door;
+      const door = game.level.door; // the door's INITIAL tile (grid 'D')
       const st = game.level.spawnTile;
       const protectedTiles = new Set([
         door.tx + ',' + door.ty,           // the door itself
@@ -538,7 +697,8 @@ const RULES = {
     onDraw(ctx, game) {
       // pulsing lava: danger color at lower opacity + a brighter top strip
       const t = game.stateTime * 0.08;
-      for (const key of game.hazards.keys()) {
+      for (const [key, kind] of game.hazards) {
+        if (kind !== 'lava') continue;
         const i = key.indexOf(',');
         const tx = +key.slice(0, i), ty = +key.slice(i + 1);
         const pulse = 0.45 + 0.18 * Math.sin(t + tx * 0.9 + ty * 1.7);
@@ -552,7 +712,239 @@ const RULES = {
     },
   },
 
-  // Left and right are swapped.
+  /* A button opens the gate. Pressed state resets on respawn. */
+  buttonGate: {
+    onLevelStart(game) {
+      game.gatesClosed = true;
+      game.ruleVars.buttonGate = { pressed: false };
+    },
+    onAttemptStart(game) {
+      game.gatesClosed = true;
+      game.ruleVars.buttonGate = { pressed: false };
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.buttonGate;
+      if (v.pressed) return;
+      for (const b of game.level.buttons) {
+        // the button hitbox: drawn rect sits on the floor of its tile
+        if (rectsOverlap(player.x, player.y, player.w, player.h,
+                         b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16)) {
+          v.pressed = true;
+          game.gatesClosed = false;
+          Narrator.event(game, 'onButton');
+          break;
+        }
+      }
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.buttonGate;
+      // buttons: accent rectangle on the floor (sinks when pressed)
+      for (const b of game.level.buttons) {
+        const x = b.tx * TILE, y = b.ty * TILE;
+        ctx.fillStyle = COLORS.accent;
+        if (v.pressed) {
+          ctx.globalAlpha = 0.8;
+          ctx.fillRect(x + 4, y + 32, TILE - 8, 8);
+        } else {
+          ctx.fillRect(x + 4, y + 24, TILE - 8, 16);
+          ctx.fillStyle = COLORS.bg;
+          ctx.fillRect(x + 4, y + 24, TILE - 8, 3);
+        }
+        ctx.globalAlpha = 1;
+      }
+      // gate tiles: solid while closed, faint outline when open
+      for (const g of game.level.gateTiles) {
+        const x = g.tx * TILE, y = g.ty * TILE;
+        if (game.gatesClosed) {
+          ctx.fillStyle = COLORS.text;
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = COLORS.wall;
+          ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+        } else {
+          ctx.globalAlpha = 0.22;
+          ctx.strokeStyle = COLORS.text;
+          ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+          ctx.globalAlpha = 1;
+        }
+      }
+    },
+  },
+
+  /* The door retires toward its target while you hold still. */
+  shyDoor: {
+    onLevelStart(game) {
+      const t = game.level.def.doorTarget;
+      game.ruleVars.shyDoor = {
+        startX: game.door.x, startY: game.door.y,
+        targetX: t.col * TILE, targetY: t.row * TILE,
+        progress: 0,
+        moving: false,
+      };
+    },
+    onAttemptStart(game) {
+      const v = game.ruleVars.shyDoor;
+      v.progress = 0;
+      v.moving = false;
+      game.door.x = v.startX;
+      game.door.y = v.startY;
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.shyDoor;
+      const holdingStill = player.onGround && !Input.left && !Input.right;
+      if (holdingStill && v.progress < 1) {
+        v.progress = Math.min(1, v.progress + 1 / 360); // ~6 s full travel
+      }
+      v.moving = holdingStill && v.progress < 1;
+      game.door.x = v.startX + (v.targetX - v.startX) * v.progress;
+      game.door.y = v.startY + (v.targetY - v.startY) * v.progress;
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.shyDoor;
+      if (!v.moving) return;
+      const a = 0.35 + 0.3 * Math.sin(game.stateTime * 0.25);
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = COLORS.door;
+      ctx.lineWidth = 2;
+      const d = game.door;
+      ctx.strokeRect(d.x + 3, d.y + 3, d.w - 6, d.h - 6);
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1;
+    },
+  },
+
+  /* Where you die, a spike grows (nearest unused slot, max 4 active). */
+  deathSpike: {
+    onLevelStart(game) {
+      const door = game.level.door, st = game.level.spawnTile;
+      game.ruleVars.deathSpike = {
+        slots: game.level.sSlots.map(s => ({
+          col: s.tx, row: s.ty,
+          used: false,
+          // runtime guard: slots too close to start/door can never activate
+          allowed:
+            Math.max(Math.abs(s.tx - st.col), Math.abs(s.ty - st.row)) > DEATH_SPIKE_SAFE &&
+            Math.max(Math.abs(s.tx - door.tx), Math.abs(s.ty - door.ty)) > DEATH_SPIKE_SAFE,
+        })),
+        spikes: [], // FIFO of {key, col, row, born}
+      };
+    },
+    onDeath(game) {
+      const v = game.ruleVars.deathSpike;
+      const d = game.run.deathPoints[game.run.deathPoints.length - 1];
+      // nearest unused, allowed slot to the death point (tile centers)
+      let best = null, bestDist = Infinity;
+      for (const s of v.slots) {
+        if (s.used || !s.allowed) continue;
+        const dx = s.col * TILE + 20 - d.x;
+        const dy = s.row * TILE + 20 - d.y;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) { bestDist = dist; best = s; }
+      }
+      if (!best) return;
+      best.used = true;
+      // cap: drop the oldest spike when exceeding the cap
+      while (v.spikes.length >= DEATH_SPIKE_CAP) {
+        const old = v.spikes.shift();
+        game.hazards.delete(old.key);
+      }
+      const key = best.col + ',' + best.row;
+      game.hazards.set(key, 'spike');
+      v.spikes.push({ key, col: best.col, row: best.row, born: game.stateTime });
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.deathSpike;
+      ctx.fillStyle = COLORS.danger;
+      for (const s of v.spikes) {
+        const pop = Math.min(1, (game.stateTime - s.born) / 6); // quick pop-in
+        const h = 32 * pop;
+        const x = s.col * TILE, yBase = s.row * TILE + TILE;
+        ctx.beginPath();
+        ctx.moveTo(x,      yBase); ctx.lineTo(x + 10, yBase - h); ctx.lineTo(x + 20, yBase);
+        ctx.moveTo(x + 20, yBase); ctx.lineTo(x + 30, yBase - h); ctx.lineTo(x + 40, yBase);
+        ctx.fill();
+      }
+    },
+  },
+
+  /* Every jump shifts all M stones one tile right (wrapping per lane). */
+  jumpShift: {
+    onLevelStart(game) {
+      game.ruleVars.jumpShift = { pending: [], flashes: new Map() };
+    },
+    onAttemptStart(game) {
+      game.ruleVars.jumpShift.pending = []; // drops delayed moves (stones stay put)
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.jumpShift;
+      if (game.justJumped) {
+        for (const lane of game.level.def.shiftLanes) {
+          const cols = [];
+          for (const key of game.mSolid) {
+            const i = key.indexOf(',');
+            const col = +key.slice(0, i), row = +key.slice(i + 1);
+            if (row === lane.row && col >= lane.colStart && col <= lane.colEnd) cols.push(col);
+          }
+          // move rightmost first so a pair never eats its own neighbour
+          cols.sort((a, b) => b - a);
+          for (const col of cols) {
+            const dest = col + 1 > lane.colEnd ? lane.colStart : col + 1;
+            const fromKey = col + ',' + lane.row;
+            const toKey = dest + ',' + lane.row;
+            // blocked = destination still occupied (chains behind a stuck block)
+            // or the player is in the way (anti-squash): retry on later frames
+            if (game.mSolid.has(toKey) ||
+                rectsOverlap(player.x, player.y, player.w, player.h,
+                             dest * TILE, lane.row * TILE, TILE, TILE)) {
+              v.pending.push({ fromKey, toKey });
+              continue;
+            }
+            game.mSolid.delete(fromKey);
+            game.mSolid.add(toKey);
+            v.flashes.set(toKey, 14);
+          }
+        }
+      }
+      // retry delayed moves as soon as the destination is free and the player is clear
+      for (let i = v.pending.length - 1; i >= 0; i--) {
+        const m = v.pending[i];
+        const ci = m.toKey.indexOf(',');
+        const dCol = +m.toKey.slice(0, ci), dRow = +m.toKey.slice(ci + 1);
+        if (game.mSolid.has(m.toKey)) continue; // destination still occupied
+        if (rectsOverlap(player.x, player.y, player.w, player.h,
+                         dCol * TILE, dRow * TILE, TILE, TILE)) continue;
+        game.mSolid.delete(m.fromKey);
+        game.mSolid.add(m.toKey);
+        v.flashes.set(m.toKey, 14);
+        v.pending.splice(i, 1);
+      }
+      for (const [k, f] of v.flashes) {
+        if (f <= 1) v.flashes.delete(k); else v.flashes.set(k, f - 1);
+      }
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.jumpShift;
+      for (const key of game.mSolid) {
+        const i = key.indexOf(',');
+        const col = +key.slice(0, i), row = +key.slice(i + 1);
+        const x = col * TILE, y = row * TILE;
+        const flash = v.flashes.get(key) || 0;
+        if (flash > 0) {
+          ctx.fillStyle = COLORS.accent;
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.globalAlpha = flash / 14;
+          ctx.fillRect(x - 2, y - 2, TILE + 4, TILE + 4);
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.fillStyle = COLORS.wall;
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = COLORS.accent;
+          ctx.fillRect(x, y, TILE, 5);
+        }
+      }
+    },
+  },
+
+  /* Left and right are swapped. */
   mirrorControls: {
     modifyInput(input) {
       const l = input.left;
@@ -611,13 +1003,12 @@ function drawSpikes() {
 }
 
 function drawDoor() {
-  const d = Game.level.door;
-  const x = d.tx * TILE, y = d.ty * TILE;
+  const d = Game.door;
   ctx.fillStyle = COLORS.door;
-  ctx.fillRect(x + 6, y + 6, TILE - 12, TILE - 6);   // sits on tile bottom
+  ctx.fillRect(d.x + 6, d.y + 6, d.w - 12, d.h - 6);   // sits on tile bottom
   ctx.fillStyle = COLORS.bg;
   ctx.beginPath();
-  ctx.arc(x + TILE - 13, y + 24, 2.5, 0, Math.PI * 2); // knob
+  ctx.arc(d.x + d.w - 13, d.y + 24, 2.5, 0, Math.PI * 2); // knob
   ctx.fill();
 }
 
@@ -656,6 +1047,14 @@ function drawDebug() {
   // paths
   drawPathLine(Game.run.lastWinPath, COLORS.door, 0.6);    // green: last win
   drawPathLine(Game.run.currentPath, COLORS.player, 0.45); // white: current
+
+  // potential spike slots as faint outlines
+  ctx.globalAlpha = 0.28;
+  ctx.strokeStyle = COLORS.text;
+  for (const s of Game.level.sSlots) {
+    ctx.strokeRect(s.tx * TILE + 2.5, s.ty * TILE + 2.5, TILE - 5, TILE - 5);
+  }
+  ctx.globalAlpha = 1;
 
   // death points for this level as small x marks
   ctx.strokeStyle = COLORS.danger;
@@ -735,7 +1134,7 @@ function render() {
   drawSpikes();
   drawDoor();
   for (const rule of Game.activeRules) {
-    if (rule.onDraw) rule.onDraw(ctx, Game);  // rule world effects (lava...)
+    if (rule.onDraw) rule.onDraw(ctx, Game);  // rule world effects
   }
   drawParticles();
   drawPlayer(ctx, player);
@@ -757,9 +1156,14 @@ const Game = {
   stateTime: 0,         // frames spent in the current state
   freeze: 0,            // hitstop frames after a death
   flash: 0,             // red flash frames after a death
-  level: null,          // parsed level: {name, tiles, spawn, door, spawnTile, rules}
+  level: null,          // parsed level data (see loadLevel)
   activeRules: [],      // resolved rule objects of the current level
-  hazards: new Map(),   // dynamic hazard layer: "col,row" -> 'lava' (per level)
+  ruleVars: {},         // per-level rule state, keyed by rule id (reset on load)
+  hazards: new Map(),   // dynamic hazard layer: "col,row" -> 'lava' | 'spike'
+  mSolid: new Set(),    // dynamic solid tiles from 'M' markers: "col,row"
+  gatesClosed: true,    // 'G' tiles are solid while true
+  door: { x: 0, y: 0, w: TILE, h: TILE }, // dynamic door entity (win target)
+  justJumped: false,    // true during the update where a jump started
   debug: false,         // F2
   run: {
     currentPath: [],    // positions of the attempt in progress
@@ -769,13 +1173,19 @@ const Game = {
   },
 };
 
-// Narrator system: picks the line for a level. Context-aware lines can be
-// added here later (based on deaths, rules, wins, ...).
+// Narrator system: picks the line for a level; event lines are swapped in
+// by rules via the level's narratorEvents map.
 const Narrator = {
   current: '',
   lineFor(levelIndex, context) {
-    const key = LEVELS[levelIndex].narrator;
-    return STRINGS.narrator[key] || key; // unknown key = used as the line itself
+    const entry = STRINGS.levels[levelIndex + 1];
+    return entry ? entry.narrator : '';
+  },
+  event(game, name) {
+    const map = game.level.narratorEvents;
+    if (!map || !map[name]) return;
+    const events = STRINGS.levels[game.levelIndex + 1].events || {};
+    if (events[map[name]]) Narrator.current = events[map[name]];
   },
 };
 
@@ -784,27 +1194,46 @@ function setState(s) {
   Game.stateTime = 0;
 }
 
+// attempt start: fresh narrator line + per-attempt rule state
+function attemptStart(game) {
+  Narrator.current = Narrator.lineFor(game.levelIndex, game);
+  for (const rule of game.activeRules) {
+    if (rule.onAttemptStart) rule.onAttemptStart(game);
+  }
+}
+
 function loadLevel(index) {
   const def = LEVELS[index];
   const parsed = parseLevelGrid(def.grid);
   Game.levelIndex = index;
   Game.level = {
+    def,              // the level definition (doorTarget, shiftLanes, ...)
     name: def.name,
     tiles: def.grid.slice(),
     spawn: parsed.spawn,
-    door: parsed.door,
+    door: parsed.door,          // door TILE (initial position; protections use it)
     spawnTile: parsed.spawnTile,
+    buttons: parsed.buttons,
+    gateTiles: parsed.gateTiles,
+    sSlots: parsed.sSlots,
     rules: def.rules,
+    narratorEvents: def.narratorEvents || null,
   };
+  // theme
+  COLORS = CONFIG.THEMES[def.act || 1] || CONFIG.THEMES[1];
   // clean slate for the new level: no state leaks between rooms
   Game.hazards = new Map();
+  Game.mSolid = new Set(parsed.mTiles.map(t => t.tx + ',' + t.ty));
+  Game.gatesClosed = true;
+  Game.ruleVars = {};
+  Game.door = { x: parsed.door.tx * TILE, y: parsed.door.ty * TILE, w: TILE, h: TILE };
+  Game.justJumped = false;
   Game.activeRules = def.rules
     .map(id => RULES[id] || console.warn('Unknown rule id:', id))
     .filter(Boolean);
   Game.freeze = 0;
   Game.flash = 0;
   particles = [];
-  Narrator.current = Narrator.lineFor(index, Game);
   resetPlayerToSpawn();
   // starting a new attempt's path (lastWinPath & deathPoints persist)
   Game.run.currentPath = [];
@@ -812,6 +1241,7 @@ function loadLevel(index) {
   for (const rule of Game.activeRules) {
     if (rule.onLevelStart) rule.onLevelStart(Game);
   }
+  attemptStart(Game);
   setState('playing');
 }
 
@@ -838,6 +1268,7 @@ function restartAttempt(died) {
   Game.run.pathTick = 0;
   resetPlayerToSpawn();
   Game.attempt++;
+  attemptStart(Game); // per-attempt state resets on respawn
 }
 
 function onPlayerDeath() {
@@ -871,10 +1302,14 @@ function update() {
   // F2 toggles debug mode
   if (Input.debugToggle) Game.debug = !Game.debug;
 
-  // N skips to the next level — debug mode only (no win hooks fire)
-  if (Game.debug && Input.debugSkip && Game.state === 'playing') {
-    if (Game.levelIndex + 1 < LEVELS.length) loadLevel(Game.levelIndex + 1);
-    else setState('end');
+  // debug-only level jumps: N = next, 1..6 = straight to that room
+  if (Game.debug && Game.state === 'playing') {
+    if (Input.debugSkip) {
+      if (Game.levelIndex + 1 < LEVELS.length) loadLevel(Game.levelIndex + 1);
+      else setState('end');
+    } else if (Input.debugDigit >= 1 && Input.debugDigit <= LEVELS.length) {
+      loadLevel(Input.debugDigit - 1);
+    }
   }
 
   // R: restart attempt while playing, restart the whole run on the end screen
@@ -889,6 +1324,7 @@ function update() {
         Game.freeze--; // death hitstop; player is already back at spawn
       } else {
         const eff = buildEffectiveInput(Game);
+        Game.justJumped = false;
         updatePlayer(eff);
         for (const rule of Game.activeRules) {
           if (rule.onUpdate) rule.onUpdate(Game);
@@ -914,6 +1350,7 @@ function update() {
   Input.restartPressed = false;
   Input.debugToggle = false;
   Input.debugSkip = false;
+  Input.debugDigit = 0;
 }
 
 /* ============================= MAIN LOOP ================================= */

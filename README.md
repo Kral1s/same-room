@@ -46,3 +46,25 @@ Built in steps. Done so far:
   same room plus a higher route where your Room 1 path becomes pulsing lava.
   Debug mode: **F2** toggles path lines/death marks/rule list, **N** skips a
   level (debug only).
+- **Step 3** — acts + theming (`act` per level, `CONFIG.THEMES` palettes,
+  act 1 gets a warm accent), the door is now a dynamic entity
+  (`game.door` — win = overlap vs its CURRENT position), new tile symbols:
+  `B` button, `G` gate, `S` spawn-slot, `M` shifting stone (all rule-drawn and
+  fully backwards compatible), and four new rules:
+  - **Room 3 `buttonGate`** — the narrator begs you not to touch the big red
+    button. Touch it and the gate column blocking the correct route opens
+    (per attempt), while the narrator loses it.
+  - **Room 4 `shyDoor`** — the door is shy: it slides away to its target
+    whenever you move or press anything, but creeps home over ~6 seconds
+    while you stand perfectly still. Dying slams it all the way back.
+  - **Room 5 `deathSpike`** — every death turns the nearest unused floor
+    slot into a fresh spike (pops in, persists per level, max 4, oldest
+    drops first). Placement is provably safe: solvability with ALL slots
+    active was simulated against measured jump physics.
+  - **Room 6 `jumpShift`** — stepping-stones over a spike pit shuffle one
+    lane cell right on every jump (instant, with a highlight, and a squash
+    safety that defers a move if you'd be standing inside a stone).
+  Levels 3–6 must be completed WITHOUT `pathLava` touching them...
+  New debug goodies: **1–6** jump straight to a level (debug mode),
+  faint outlines show free deathSpike slots.
+
