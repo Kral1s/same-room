@@ -37,6 +37,7 @@
      Act 1: L1 (no rules) · L2 pathLava · L3 buttonGate · L4 shyDoor
             L5 deathSpike · L6 jumpShift
      Act 2: L7 mirrorControls · L8 gravityFlip · L9 swapKeysOnJump
+            L10 inputDelay · L11 noRepeatDirection · L12 speedByDoorDistance
    ========================================================================== */
 
 /* ============================== CONFIG =================================== */
@@ -82,6 +83,11 @@ const CONFIG = {
   RULES: {
     flipImpulse: 0.35,     // gravityFlip: initial speed = this x jump speed
     swapGlyphFrames: 24,   // swapKeysOnJump: crossing-arrows FX length (~400 ms)
+    inputDelayFrames: 30,  // inputDelay: gameplay input lags by this (0.5 s)
+    // speedByDoorDistance: room-time multiplier by player-to-door distance
+    timeScaleMin: 0.65, timeScaleMax: 1.5,
+    timeScaleNear: 160, timeScaleFar: 900,  // px, center to center
+    timeScaleSmooth: 0.05,                  // per-render-frame smoothing
   },
 
   // Player look & hitbox in one place — the sprite will change later,
@@ -279,11 +285,24 @@ const STRINGS = {
     9: {
       narrator: 'Every jump swaps left and right. Surprise.',
     },
+    10: {
+      narrator: 'Your inputs arrive late. Plan ahead.',
+    },
+    11: {
+      narrator: 'No walking the same direction twice in a row.',
+    },
+    12: {
+      narrator: 'Easy one. The nearer the door, the faster the room.',
+    },
   },
   debug: {
     rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
     deaths:    (n)   => 'deaths: ' + n,
-    ruleState: (g, s) => 'gravityDir: ' + g + ' · keysSwapped: ' + s,
+    ruleState: (g, s, m, ts, d) =>
+      'gravityDir: ' + g + ' · keysSwapped: ' + s +
+      ' · lastMoveDir: ' + (m === null ? 'null' : m) +
+      ' · timeScale: ' + ts.toFixed(2) +
+      ' · inputDelay: ' + (d ? 'on' : 'off'),
   },
 };
 
@@ -600,6 +619,83 @@ const LEVELS = [
       "################################",
     ],
   },
+  {
+    act: 2,
+    name: 'Delay Line',
+    rules: ['inputDelay'],
+    grid: [ // forgiving flat run; wide optional platforms with one 3-tile gap
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#.......#######...#####........#",
+      "#..............................#",
+      "#..P...............^......^..D.#",
+      "################################",
+    ],
+  },
+  {
+    act: 2,
+    name: 'Second Thoughts',
+    rules: ['noRepeatDirection'],
+    grid: [ // three 2-tile spike strips; 4-tile islands between them for the
+            // mandatory opposite-direction tap
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..P........^^....^^....^^...D.#",
+      "################################",
+    ],
+  },
+  {
+    act: 2,
+    name: 'Tailwind',
+    rules: ['speedByDoorDistance'],
+    grid: [ // easy breather: two floor dips to hop, one optional spiked perch,
+            // the last 6 tiles before the door are completely free
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............^^..............#",
+      "#.............####.............#",
+      "#..............................#",
+      "#..P.......................D...#",
+      "##########..#####..#############",
+    ],
+  },
 ];
 
 // Parses a grid into runtime level data (spawn, door tile, special markers).
@@ -738,6 +834,7 @@ function resetPlayerToSpawn() {
   // rule-owned global flags always start fresh on level load AND respawn
   Game.gravityDir = 1;
   Game.keysSwapped = false;
+  Game.lastMoveDir = null;
 }
 
 // death face overlay state (eyes -> small "x" marks for the first frames)
@@ -809,9 +906,14 @@ function samplePath() {
 }
 
 /* The input after rules are applied (e.g. mirrorControls). Built fresh each
-   playing update from the raw Input, so rules never mutate real key state. */
+   playing update from the raw Input, so rules never mutate real key state.
+   Jump press/release EDGES are copied through too (inputDelay needs them);
+   with no delaying rule they are exactly Input's edges, frame for frame. */
 function buildEffectiveInput(game) {
-  let eff = { left: Input.left, right: Input.right, jumpHeld: Input.jumpHeld };
+  let eff = {
+    left: Input.left, right: Input.right, jumpHeld: Input.jumpHeld,
+    jumpPressed: Input.jumpPressed, jumpReleased: Input.jumpReleased,
+  };
   for (const rule of game.activeRules) {
     if (rule.modifyInput) eff = rule.modifyInput(eff, game) || eff;
   }
@@ -835,7 +937,7 @@ function updatePlayer(eff) {
   if (p.onGround) p.coyote = PHYS.coyoteFrames;
   else if (p.coyote > 0) p.coyote--;
 
-  if (Input.jumpPressed) p.jumpBuffer = PHYS.bufferFrames;
+  if (eff.jumpPressed) p.jumpBuffer = PHYS.bufferFrames;
   else if (p.jumpBuffer > 0) p.jumpBuffer--;
 
   // jump condition is the SAME as always (grounded incl. coyote + buffering);
@@ -858,7 +960,7 @@ function updatePlayer(eff) {
   // --- variable jump height: early release shortens the jump ---
   // (gravityFlip levels have no variable jump height; "rising" = moving
   //  against the current gravity direction)
-  if (Input.jumpReleased && !Game.gravityFlipOn && p.vy * Game.gravityDir < 0)
+  if (eff.jumpReleased && !Game.gravityFlipOn && p.vy * Game.gravityDir < 0)
     p.vy *= PHYS.jumpCut;
 
   // --- gravity with terminal velocity (terminal FALL speed applies only in
@@ -926,6 +1028,7 @@ function updatePlayer(eff) {
      onDraw(ctx,game)        draw world-layer effects (under the player)
      onDeath(game)           after the death point is recorded, before respawn
      onWin(game)             after lastWinPath is saved, before transition
+     getTimeScale(game)      room-time multiplier for the main loop (default 1)
    New rule later = one entry here + its id in a level's rules array.
    Per-level rule state lives in game.ruleVars.<ruleId> (reset on load).    */
 
@@ -1274,6 +1377,89 @@ const RULES = {
       ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.lineWidth = 1;
+    },
+  },
+
+  /* Gameplay input arrives inputDelayFrames (0.5 s) late — movement keys AND
+     jump press/release edges. A FIFO ring holds one snapshot per update;
+     until it fills after load/respawn the delayed input is neutral. R and the
+     debug keys bypass this entirely (they are not gameplay input). */
+  inputDelay: {
+    onLevelStart(game) {
+      game.ruleVars.inputDelay = { buf: [] };
+    },
+    onAttemptStart(game) {
+      game.ruleVars.inputDelay.buf.length = 0; // fresh 0.5 s of neutral input
+    },
+    modifyInput(input, game) {
+      const v = game.ruleVars.inputDelay;
+      v.buf.push({
+        left: !!input.left, right: !!input.right, jumpHeld: !!input.jumpHeld,
+        jumpPressed: !!input.jumpPressed, jumpReleased: !!input.jumpReleased,
+      });
+      if (v.buf.length <= CONFIG.RULES.inputDelayFrames)
+        return { left: false, right: false, jumpHeld: false,
+                 jumpPressed: false, jumpReleased: false };
+      return v.buf.shift(); // the input of N updates ago
+    },
+  },
+
+  /* No walking the same direction twice in a row. A "move" is one continuous
+     hold of a horizontal direction; it may start only opposite lastMoveDir.
+     A blocked direction is fully ignored (even held) until the opposite move
+     happens. Pressing a blocked direction gives a quick horizontal shake. */
+  noRepeatDirection: {
+    onLevelStart(game) {
+      game.lastMoveDir = null;
+      game.ruleVars.noRepeatDirection = { cur: 0, prevDir: 0, shakeUntil: -1e9 };
+      // cur = dir of the ongoing move (0 = none, moves end on release/reverse)
+    },
+    onAttemptStart(game) {
+      game.lastMoveDir = null;
+      const v = game.ruleVars.noRepeatDirection;
+      v.cur = 0; v.prevDir = 0; v.shakeUntil = -1e9;
+    },
+    modifyInput(input, game) {
+      const v = game.ruleVars.noRepeatDirection;
+      const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const prev = v.prevDir;
+      v.prevDir = dir;
+      if (dir === 0) { v.cur = 0; return input; } // release: move ends, ok
+      if (v.cur === dir) return input;            // ongoing move continues
+      if (dir !== game.lastMoveDir) {             // new move, opposite: start it
+        v.cur = dir;
+        game.lastMoveDir = dir;
+        return input;
+      }
+      // blocked: ignore horizontally. Shake only on a fresh blocked press.
+      if (dir !== prev && v.cur === 0)
+        v.shakeUntil = game.stateTime + 8;        // ~130 ms visual shake
+      return { ...input, left: false, right: false };
+    },
+  },
+
+  /* EASY breather: room time runs slower far from the door, faster near it.
+     The multiplier feeds the main-loop accumulator; physics steps and the
+     render rate are untouched. Smoothed so it never jumps. */
+  speedByDoorDistance: {
+    _target(game) {
+      const R = CONFIG.RULES;
+      const d = Math.hypot(player.x + player.w / 2 - (game.door.x + game.door.w / 2),
+                           player.y + player.h / 2 - (game.door.y + game.door.h / 2));
+      const t = Math.max(0, Math.min(1, (d - R.timeScaleNear) /
+                                        (R.timeScaleFar - R.timeScaleNear)));
+      return R.timeScaleMax + (R.timeScaleMin - R.timeScaleMax) * t; // near=fast
+    },
+    onLevelStart(game) {
+      game.ruleVars.speedByDoorDistance = { ts: this._target(game) }; // no jump
+    },
+    onAttemptStart(game) {
+      game.ruleVars.speedByDoorDistance.ts = this._target(game);
+    },
+    getTimeScale(game) {
+      const v = game.ruleVars.speedByDoorDistance;
+      v.ts += (this._target(game) - v.ts) * CONFIG.RULES.timeScaleSmooth;
+      return v.ts;
     },
   },
 };
@@ -1917,7 +2103,8 @@ function drawDebug() {
   ctx.lineWidth = 1;
 
   // corner info: live rule state + active rules + deaths
-  drawText(STRINGS.debug.ruleState(Game.gravityDir, Game.keysSwapped),
+  drawText(STRINGS.debug.ruleState(Game.gravityDir, Game.keysSwapped,
+           Game.lastMoveDir, Game.timeScale, Game.inputDelayOn),
            CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yState,
            fontStr(CONFIG.FONTS.debug), 'left', 0.8);
   const ids = Game.level.rules.slice();
@@ -2020,7 +2207,16 @@ function render() {
   // replaced by the shrink-into-the-door phantom (see drawWinFx).
   // When gravity is inverted (level 8) the sprite is ceiling-anchored via the
   // existing flipY opt; with gravityDir === 1 opts stay empty = same drawing.
-  const playerLook = (Game.gravityDir === -1) ? { flipY: true } : undefined;
+  let playerLook = (Game.gravityDir === -1) ? { flipY: true } : undefined;
+  // noRepeatDirection (level 11): on a blocked press the DRAWN player makes a
+  // quick +-3px damped horizontal shake (~130 ms) — pure cosmetics, the real
+  // hitbox never moves.
+  const nrd = Game.ruleVars.noRepeatDirection;
+  if (nrd && Game.state === 'playing' && Game.stateTime < nrd.shakeUntil) {
+    const k = (8 - (nrd.shakeUntil - Game.stateTime)) / 8; // 0..1
+    (playerLook || (playerLook = {})).offsetX =
+      Math.round(3 * Math.sin(k * Math.PI * 4) * (1 - k));
+  }
   if (!(Game.state === 'complete' && winFx.started))
     drawPlayer(ctx, player, playerLook);
   if (Game.debug) drawDebug();
@@ -2056,6 +2252,9 @@ const Game = {
                         // identical physics while 1, so levels 1-6 unchanged)
   gravityFlipOn: false, // cached: current level uses the gravityFlip rule
   keysSwapped: false,   // swapKeysOnJump rule: left/right exchanged while true
+  lastMoveDir: null,    // noRepeatDirection rule: null / -1 / 1
+  inputDelayOn: false,  // cached: current level uses the inputDelay rule
+  timeScale: 1,         // room-time multiplier applied this frame (debug view)
   debug: false,         // F2
   run: {
     currentPath: [],    // positions of the attempt in progress
@@ -2130,6 +2329,7 @@ function loadLevel(index) {
   Game.mSolid = new Set(parsed.mTiles.map(t => t.tx + ',' + t.ty));
   Game.gatesClosed = true;
   Game.gravityFlipOn = def.rules.includes('gravityFlip'); // cached rule flag
+  Game.inputDelayOn = def.rules.includes('inputDelay');   // cached rule flag
   Game.ruleVars = {};
   Game.door = { x: parsed.door.tx * TILE, y: parsed.door.ty * TILE, w: TILE, h: TILE };
   Game.justJumped = false;
@@ -2297,7 +2497,15 @@ function frame(now) {
   let delta = now - lastTime;
   lastTime = now;
   if (delta > 250) delta = 250; // tab was hidden etc.: don't fast-forward
-  accumulator += delta;
+  // room-time scale: a rule with getTimeScale() (speedByDoorDistance) speeds
+  // or slows simulated time; default is exactly 1 (levels 1-11 unchanged).
+  // Physics constants per fixed step are the same; rendering stays real-time.
+  let ts = 1;
+  for (const rule of Game.activeRules) {
+    if (rule.getTimeScale) { ts = rule.getTimeScale(Game); break; }
+  }
+  Game.timeScale = ts; // shown in the debug overlay
+  accumulator += delta * ts;
 
   let steps = 0;
   while (accumulator >= STEP_MS && steps < MAX_STEPS) {
