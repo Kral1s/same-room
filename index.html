@@ -28,6 +28,7 @@
      LEVEL DATA ..... ASCII levels + parsing
      PLAYER/PHYSICS . movement, collisions, hazards, particles, path recording
      RULES .......... RULES registry (per-level gameplay modifiers)
+     BACKGROUNDS .... static act backdrops + dynamic living wall
      RENDERING ...... all drawing (incl. debug view)
      GAME STATE ..... Game object, level loading, narrator, main update
      MAIN LOOP ...... fixed-timestep loop
@@ -105,6 +106,29 @@ const CONFIG = {
     debugInfo: { x: 16, yRules: 674, yDeaths: 698 }, // y = VIEW_H - 46 / VIEW_H - 28
     complete:  { x: 640, titleYOff: -8,  subYOff: 30 },   // offsets from VIEW_H/2
     end:       { x: 640, titleYOff: -40, subYOff: 0, deathsYOff: 54, restartYOff: 100 },
+  },
+
+  // Background system knobs — retune the whole backdrop look here.
+  BG: {
+    base: '#14161f',            // act-1 base background color
+    grid: {                     // subtle blueprint grid, aligned to the 40px tiles
+      color: '#cfd3e6',
+      minorAlpha: 0.04,         // line alpha every tile
+      majorAlpha: 0.08,         // line alpha every 4 tiles
+      majorEvery: 4,
+    },
+    vignette: { max: 0.25, innerRatio: 0.55 }, // distant darkening, max 25% at corners
+    tally: {                    // death tally marks (living wall)
+      color: '#ff4d5e', alpha: 0.18,
+      x: 80, y: 150,            // block start (upper-left, outside the narrator zone)
+      groupsPerRow: 4, groupGap: 46, rowGap: 50,
+      strokeGap: 7, strokeLen: 26, strokeW: 2,
+      drawIn: 9,                // stroke-in animation length (~150 ms at 60 fps)
+      max: 40,                  // cap: 8 groups of five
+    },
+    trail: { color: '#cfd3e6', alpha: 0.07, width: 2, dash: [2, 6] },
+    pulse: { alpha: 0.06, frames: 9 }, // one soft brighten per death (~150 ms)
+    narratorZone: { x: 320, y: 40, w: 640, h: 100 }, // stays calm: x 320-960, y 40-140
   },
 
   // Platformer feel. Units: pixels and frames (1 frame = 1/60 s).
@@ -210,6 +234,7 @@ const Input = {
   debugSkip: false,      // N edge: skips level (only in debug mode)
   debugDigit: 0,         // 1..6 edge: jump straight to that level (debug only)
   persianToggle: false,  // P edge: Persian narrator smoke test (debug only)
+  tallyToggle: false,    // K edge: adds 5 fake tally marks (debug only, visual only)
 };
 
 const JUMP_CODES = ['ArrowUp', 'KeyW', 'Space'];
@@ -229,6 +254,7 @@ function onKeyDown(e) {
     case 'Digit5': Input.debugDigit = 5; break;
     case 'Digit6': Input.debugDigit = 6; break;
     case 'KeyP': Input.persianToggle = true; break;
+    case 'KeyK': Input.tallyToggle = true; break;
     default:
       if (JUMP_CODES.includes(e.code)) {
         if (!Input.jumpHeld) Input.jumpPressed = true;
@@ -991,6 +1017,174 @@ const RULES = {
   },
 };
 
+/* ============================ BACKGROUNDS ================================ */
+/* Each act gets its own BACKGROUNDS entry; future acts add new static looks
+   and dynamic effects here. drawStatic renders once into an offscreen canvas
+   (only on level load / act change); drawDynamic is drawn every frame behind
+   everything and must stay cheap. Missing acts fall back to BACKGROUNDS[1]. */
+
+// offscreen static layer: painted once per level, blitted every frame
+const bgCanvas = document.createElement('canvas');
+bgCanvas.width = VIEW_W;
+bgCanvas.height = VIEW_H;
+const bgCtx = bgCanvas.getContext('2d');
+let bgAct = null; // act the static layer currently holds
+
+// living-wall state for the dynamic layer (reset on every level load)
+let bgFakeTally = 0; // K debug marks — visual only, never touches game state
+const bgWall = {
+  deathsSeen: 0,   // levelDeaths value last frame (drives pulse + tally growth)
+  tallyShown: 0,   // marks shown last frame (marks above this are animating in)
+  tallyT0: -1e9,   // stateTime when the tally count last changed
+  pulseT0: -1e9,   // stateTime of the last death pulse
+};
+function resetBGWall() {
+  bgFakeTally = 0;
+  bgWall.deathsSeen = 0;
+  bgWall.tallyShown = 0;
+  bgWall.tallyT0 = -1e9;
+  bgWall.pulseT0 = -1e9;
+}
+
+// renders the static layer for an act (only on level load / act change)
+function renderStaticBG(act) {
+  bgAct = act;
+  const entry = BACKGROUNDS[act] || BACKGROUNDS[1];
+  if (entry.drawStatic) entry.drawStatic(bgCtx, VIEW_W, VIEW_H);
+}
+function drawStaticBG() { ctx.drawImage(bgCanvas, 0, 0); }
+function drawDynamicBG() {
+  const entry = BACKGROUNDS[bgAct] || BACKGROUNDS[1];
+  if (entry.drawDynamic) entry.drawDynamic(ctx, Game, Game.stateTime);
+}
+
+// deterministic pseudo-noise seeded by (mark index i, channel k) — scratched
+// look without jitter between frames
+function bgNoise(i, k) {
+  const s = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
+  return s - Math.floor(s); // [0,1)
+}
+
+// --- act 1: subtle blueprint grid + vignette (static) ---
+function drawBGAct1Static(g, w, h) {
+  g.fillStyle = CONFIG.BG.base;
+  g.fillRect(0, 0, w, h);
+  // crisp 1px lines: half-pixel offset puts them on pixel centers
+  const G = CONFIG.BG.grid, step = TILE, mStep = TILE * G.majorEvery;
+  g.lineWidth = 1;
+  g.strokeStyle = G.color;
+  g.globalAlpha = G.minorAlpha;
+  g.beginPath();
+  for (let x = step; x < w; x += step)
+    if (x % mStep !== 0) { g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h); }
+  for (let y = step; y < h; y += step)
+    if (y % mStep !== 0) { g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); }
+  g.stroke();
+  g.globalAlpha = G.majorAlpha;
+  g.beginPath();
+  for (let x = mStep; x < w; x += mStep) { g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h); }
+  for (let y = mStep; y < h; y += mStep) { g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); }
+  g.stroke();
+  g.globalAlpha = 1;
+  // very soft vignette: clear center, edges darken by at most 25%
+  const V = CONFIG.BG.vignette;
+  const outer = Math.hypot(w / 2, h / 2);
+  const grad = g.createRadialGradient(w / 2, h / 2, outer * V.innerRatio, w / 2, h / 2, outer);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,' + V.max + ')');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, h);
+}
+
+// --- act 1: living wall (dynamic) — tally marks, win-path trail, death pulse ---
+function drawBGAct1Dynamic(g, game, t) {
+  const T = CONFIG.BG.tally, Z = CONFIG.BG.narratorZone;
+  const inZone = (x, y) => x >= Z.x && x <= Z.x + Z.w && y >= Z.y && y <= Z.y + Z.h;
+
+  // track deaths: one death pulse per death, tally grows with it
+  const real = game.levelDeaths | 0;
+  if (real > bgWall.deathsSeen) {
+    bgWall.pulseT0 = t;
+    bgWall.deathsSeen = real;
+  } else if (real < bgWall.deathsSeen) { // safety: level swapped underneath us
+    bgWall.deathsSeen = real;
+    bgWall.tallyShown = 0;
+  }
+
+  // (c) death pulse: the wall brightens slightly once per death, then fades
+  const dtp = t - bgWall.pulseT0;
+  if (dtp >= 0 && dtp < CONFIG.BG.pulse.frames) {
+    g.globalAlpha = CONFIG.BG.pulse.alpha * (1 - dtp / CONFIG.BG.pulse.frames);
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, VIEW_W, VIEW_H);
+    g.globalAlpha = 1;
+  }
+
+  // (b) faded trail of the last winning path (skipped on pathLava levels,
+  //     where lava already shows the path; skipped inside the narrator zone)
+  const path = game.run.lastWinPath;
+  if (path.length && !game.level.rules.includes('pathLava')) {
+    const TR = CONFIG.BG.trail;
+    g.strokeStyle = TR.color;
+    g.globalAlpha = TR.alpha;
+    g.lineWidth = TR.width;
+    g.setLineDash(TR.dash);
+    g.beginPath();
+    let pen = false;
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i];
+      if (inZone(p.x, p.y)) { pen = false; continue; }
+      if (!pen) { g.moveTo(p.x, p.y); pen = true; }
+      else g.lineTo(p.x, p.y);
+    }
+    g.stroke();
+    g.setLineDash([]);
+    g.globalAlpha = 1;
+    g.lineWidth = 1;
+  }
+
+  // (a) death tally marks: groups of five, hand-scratched, deterministic
+  const target = Math.min(bgWall.deathsSeen + bgFakeTally, T.max);
+  if (target !== bgWall.tallyShown) {
+    bgWall.tallyT0 = t;
+    bgWall.tallyShown = Math.max(0, Math.min(target, T.max));
+  }
+  const n = bgWall.tallyShown;
+  if (n > 0) {
+    g.strokeStyle = T.color;
+    g.globalAlpha = T.alpha;
+    g.lineWidth = T.strokeW;
+    g.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const grp = Math.floor(i / 5), inner = i % 5;
+      const row = Math.floor(grp / T.groupsPerRow), col = grp % T.groupsPerRow;
+      const gx = T.x + col * T.groupGap, gy = T.y + row * T.rowGap;
+      const dx = (bgNoise(i, 1) - 0.5) * 4, dy = (bgNoise(i, 2) - 0.5) * 4;
+      const tilt = (bgNoise(i, 3) - 0.5) * 0.16;
+      // newest marks stroke in over ~150ms; older ones are complete
+      const frac = (bgWall.tallyT0 > t - T.drawIn && i === n - 1)
+        ? Math.max(0.01, (t - bgWall.tallyT0) / T.drawIn)
+        : 1;
+      g.beginPath();
+      if (inner < 4) {
+        const sx = gx + 6 + inner * T.strokeGap + dx, sy = gy + dy;
+        g.moveTo(sx, sy);
+        g.lineTo(sx + tilt * T.strokeLen * frac, sy + T.strokeLen * frac);
+      } else { // diagonal slash across the group's four verticals
+        const x0 = gx + 2 + dx, y0 = gy + T.strokeLen + dy;
+        const x1 = gx + 6 + 3 * T.strokeGap + 4, y1 = gy + dy - 3;
+        g.moveTo(x0, y0);
+        g.lineTo(x0 + (x1 - x0) * frac, y0 + (y1 - y0) * frac);
+      }
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    g.lineWidth = 1;
+  }
+}
+
+const BACKGROUNDS = { 1: { drawStatic: drawBGAct1Static, drawDynamic: drawBGAct1Dynamic } };
+
 /* ============================= RENDERING ================================= */
 
 const canvas = document.getElementById('game');
@@ -1233,13 +1427,15 @@ function drawFlash() {
 }
 
 function render() {
-  ctx.fillStyle = COLORS.bg;
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  // render order: static background (offscreen act layer) -> dynamic living
+  // wall -> tiles/walls/hazards -> entities -> player -> narrator pill + HUD
+  drawStaticBG();
 
   if (Game.state === 'end') {
     drawEndScreen();
     return;
   }
+  drawDynamicBG();
   drawRoom();
   drawSpikes();
   drawDoor();
@@ -1263,6 +1459,7 @@ const Game = {
   state: 'playing',     // 'playing' | 'complete' | 'end'
   levelIndex: 0,
   deaths: 0,            // total deaths this run (HUD counter)
+  levelDeaths: 0,       // deaths in the CURRENT level (living-wall tally marks)
   attempt: 1,           // attempt number in the current room
   stateTime: 0,         // frames spent in the current state
   freeze: 0,            // hitstop frames after a death
@@ -1332,6 +1529,11 @@ function loadLevel(index) {
   };
   // theme
   COLORS = CONFIG.THEMES[def.act || 1] || CONFIG.THEMES[1];
+  // background: repaint the static act layer (only happens on level load),
+  // reset the living wall, reset this level's death tally
+  renderStaticBG(def.act || 1);
+  resetBGWall();
+  Game.levelDeaths = 0;
   // clean slate for the new level: no state leaks between rooms
   Game.hazards = new Map();
   Game.mSolid = new Set(parsed.mTiles.map(t => t.tx + ',' + t.ty));
@@ -1371,6 +1573,7 @@ function restartAttempt(died) {
       if (rule.onDeath) rule.onDeath(Game);
     }
     Game.deaths++;
+    Game.levelDeaths++;
     Game.flash = FLASH_FRAMES;
     Game.freeze = DEATH_FREEZE_FRAMES;
     spawnDeathBurst(player.x + player.w / 2, player.y + player.h / 2);
@@ -1413,11 +1616,16 @@ function update() {
   // F2 toggles debug mode
   if (Input.debugToggle) {
     Game.debug = !Game.debug;
-    if (!Game.debug) persianSmoke = false; // the smoke test belongs to debug view only
+    if (!Game.debug) { persianSmoke = false; bgFakeTally = 0; } // debug-only visuals reset
   }
 
   // P toggles the Persian smoke-test string in the narrator slot (debug only)
   if (Input.persianToggle && Game.debug) persianSmoke = !persianSmoke;
+
+  // K adds 5 fake tally marks to the living wall (debug only, visual only —
+  // the real death counters are not touched)
+  if (Input.tallyToggle && Game.debug)
+    bgFakeTally = Math.min(bgFakeTally + 5, CONFIG.BG.tally.max);
 
   // debug-only level jumps: N = next, 1..6 = straight to that room
   if (Game.debug && Game.state === 'playing') {
@@ -1469,6 +1677,7 @@ function update() {
   Input.debugSkip = false;
   Input.debugDigit = 0;
   Input.persianToggle = false;
+  Input.tallyToggle = false;
 }
 
 /* ============================= MAIN LOOP ================================= */
