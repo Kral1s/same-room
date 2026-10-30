@@ -73,6 +73,40 @@ const CONFIG = {
     color: '#f2f2f2',
   },
 
+  // Typography: ONE clean sans stack (system fonts only — no webfonts,
+  // no serif, italic or calligraphic styles anywhere).
+  FONTS: {
+    family:     '"Segoe UI", "Inter", "Roboto", "Helvetica Neue", Arial, Tahoma, sans-serif',
+    narrator:   { size: 28, weight: 700 },  // top-center band; auto-shrinks, see UI.narrator
+    hud:        { size: 16, weight: 600 },  // room counter / death counter
+    overlay:    { size: 42, weight: 700 },  // "ROOM COMPLETE" title
+    overlaySub: { size: 17, weight: 600 },  // "ROOM COMPLETE" subtitle
+    endTitle:   { size: 46, weight: 700 },  // "To be continued..." title
+    endLine:    { size: 17, weight: 600 },  // end screen body lines
+    debug:      { size: 13, weight: 600 },  // F2 overlay corner info
+  },
+
+  // UI layout — every text position on screen lives here.
+  // Layout note: rows 1-3, x 320-960 are reserved for the narrator;
+  // no level content may be placed there.
+  UI: {
+    direction: 'ltr', // canvas text direction ('rtl' reserved for future Persian mode)
+    hudRoom:   { x: 24,   y: 36 },
+    hudDeaths: { x: 1256, y: 36 },  // = VIEW_W - 24
+    narrator: {
+      x: 640, y: 76,          // center of the reserved band (rows 1-2)
+      maxTextW: 600,          // shrink-to-fit budget
+      maxPillW: 640,          // the pill can never leave x 320..960
+      padX: 16, padY: 8,
+      minSize: 20,            // narrator never shrinks below this
+      lineHeight: 1.25,       // relative to font size (two-line mode)
+      pillColor: '#14161f', pillAlpha: 0.7, pillRadius: 14,
+    },
+    debugInfo: { x: 16, yRules: 674, yDeaths: 698 }, // y = VIEW_H - 46 / VIEW_H - 28
+    complete:  { x: 640, titleYOff: -8,  subYOff: 30 },   // offsets from VIEW_H/2
+    end:       { x: 640, titleYOff: -40, subYOff: 0, deathsYOff: 54, restartYOff: 100 },
+  },
+
   // Platformer feel. Units: pixels and frames (1 frame = 1/60 s).
   PHYS: {
     gravity:      0.55,   // added to vy every frame
@@ -175,6 +209,7 @@ const Input = {
   debugToggle: false,    // F2 edge: toggles debug mode
   debugSkip: false,      // N edge: skips level (only in debug mode)
   debugDigit: 0,         // 1..6 edge: jump straight to that level (debug only)
+  persianToggle: false,  // P edge: Persian narrator smoke test (debug only)
 };
 
 const JUMP_CODES = ['ArrowUp', 'KeyW', 'Space'];
@@ -193,6 +228,7 @@ function onKeyDown(e) {
     case 'Digit4': Input.debugDigit = 4; break;
     case 'Digit5': Input.debugDigit = 5; break;
     case 'Digit6': Input.debugDigit = 6; break;
+    case 'KeyP': Input.persianToggle = true; break;
     default:
       if (JUMP_CODES.includes(e.code)) {
         if (!Input.jumpHeld) Input.jumpPressed = true;
@@ -969,13 +1005,89 @@ function fitCanvas() {
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-function drawText(str, x, y, font, align, alpha) {
+// builds a canvas font string from a CONFIG.FONTS entry (size optionally overridden)
+function fontStr(f, size) {
+  return f.weight + ' ' + (size || f.size) + 'px ' + CONFIG.FONTS.family;
+}
+
+// Central text draw: THE one place that sets font, direction, color, alpha.
+// A call-site `dir` overrides CONFIG.UI.direction (debug Persian smoke test).
+function drawText(str, x, y, font, align, alpha, dir) {
   ctx.globalAlpha = (alpha === undefined ? 1 : alpha);
   ctx.font = font;
+  ctx.direction = dir || CONFIG.UI.direction;
   ctx.textAlign = align;
   ctx.fillStyle = COLORS.text;
   ctx.fillText(str, x, y);
   ctx.globalAlpha = 1;
+}
+
+function roundedRectPath(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+// Debug-only Persian smoke test (P while debug mode is on). Deliberately NOT
+// in STRINGS: it only verifies shaping + RTL rendering and never ships.
+const PERSIAN_SMOKE = 'این یک آزمایش است. اتاق ۳ از ۳۰';
+let persianSmoke = false;
+
+// Shrink-to-fit, then wrap (at most TWO centered lines). Centralized so any
+// future long narrator line behaves identically.
+function fitNarrator(text, dir) {
+  const U = CONFIG.UI.narrator, F = CONFIG.FONTS.narrator;
+  ctx.direction = dir;
+  const measure = (s, size) => { ctx.font = fontStr(F, size); return ctx.measureText(s).width; };
+  let size = F.size;
+  while (size > U.minSize && measure(text, size) > U.maxTextW) size--;
+  if (measure(text, size) <= U.maxTextW) return { lines: [text], size };
+  // still too wide at minSize: split at the most width-balanced word boundary
+  const words = text.split(' ');
+  if (words.length === 1) return { lines: [text], size };
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const a = words.slice(0, i).join(' '), b = words.slice(i).join(' ');
+    const w = Math.max(measure(a, size), measure(b, size));
+    if (!best || w < best.w) best = { w, lines: [a, b] };
+  }
+  return { lines: best.lines, size };
+}
+
+// Narrator line in the reserved top-center band (rows 1-2), on a subtle
+// rounded pill with a soft shadow. Visible for the whole level (no fading).
+function drawNarrator() {
+  const text = (persianSmoke && Game.debug) ? PERSIAN_SMOKE : Narrator.current;
+  if (!text) return;
+  const dir = (persianSmoke && Game.debug) ? 'rtl' : CONFIG.UI.direction;
+  const U = CONFIG.UI.narrator;
+  const fit = fitNarrator(text, dir);
+  const lh = Math.round(fit.size * U.lineHeight);
+  const font = fontStr(CONFIG.FONTS.narrator, fit.size);
+  ctx.direction = dir; ctx.font = font;
+  const textW = Math.max(...fit.lines.map(l => ctx.measureText(l).width));
+  const blockH = fit.lines.length * lh;
+  const pillW = Math.min(U.maxPillW, textW + U.padX * 2);
+  const pillH = blockH + U.padY * 2;
+  const pillX = U.x - pillW / 2, pillY = U.y - blockH / 2 - U.padY;
+  // pill backdrop with a very soft shadow
+  ctx.save();
+  ctx.globalAlpha = U.pillAlpha;
+  ctx.fillStyle = U.pillColor;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 3;
+  roundedRectPath(pillX, pillY, pillW, pillH, U.pillRadius);
+  ctx.fill();
+  ctx.restore();
+  fit.lines.forEach((line, i) => {
+    const baseY = U.y - blockH / 2 + lh * i + lh * 0.7; // blocks centered at U.y
+    drawText(line, U.x, baseY, font, 'center', undefined, dir);
+  });
 }
 
 function drawRoom() {
@@ -1070,23 +1182,21 @@ function drawDebug() {
 
   // corner info: active rules + deaths
   const ids = Game.level.rules.slice();
-  drawText(STRINGS.debug.rules(ids), 16, VIEW_H - 46,
-           '600 13px ui-monospace, monospace', 'left', 0.8);
-  drawText(STRINGS.debug.deaths(Game.deaths), 16, VIEW_H - 28,
-           '600 13px ui-monospace, monospace', 'left', 0.8);
+  drawText(STRINGS.debug.rules(ids), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yRules,
+           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+  drawText(STRINGS.debug.deaths(Game.deaths), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yDeaths,
+           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
 }
 
 /* ---- HUD & overlays ---- */
 
 function drawHUD() {
   drawText(STRINGS.hud.room(Game.levelIndex + 1, TOTAL_LEVELS),
-           24, 36, '600 17px system-ui, sans-serif', 'left');
+           CONFIG.UI.hudRoom.x, CONFIG.UI.hudRoom.y,
+           fontStr(CONFIG.FONTS.hud), 'left');
   drawText(STRINGS.hud.deaths(Game.deaths),
-           VIEW_W - 24, 36, '600 17px system-ui, sans-serif', 'right');
-  if (Game.state === 'playing') {
-    drawText(Narrator.current, VIEW_W / 2, VIEW_H - 22,
-             'italic 17px Georgia, serif', 'center', 0.9);
-  }
+           CONFIG.UI.hudDeaths.x, CONFIG.UI.hudDeaths.y,
+           fontStr(CONFIG.FONTS.hud), 'right');
 }
 
 function drawCompleteOverlay() {
@@ -1095,23 +1205,23 @@ function drawCompleteOverlay() {
   ctx.globalAlpha = 0.72 * a;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   ctx.globalAlpha = 1;
-  drawText(STRINGS.transitions.completeTitle, VIEW_W / 2, VIEW_H / 2 - 8,
-           '700 42px system-ui, sans-serif', 'center', a);
-  drawText(STRINGS.transitions.completeSub, VIEW_W / 2, VIEW_H / 2 + 30,
-           'italic 17px Georgia, serif', 'center', a);
+  drawText(STRINGS.transitions.completeTitle, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.titleYOff,
+           fontStr(CONFIG.FONTS.overlay), 'center', a);
+  drawText(STRINGS.transitions.completeSub, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.subYOff,
+           fontStr(CONFIG.FONTS.overlaySub), 'center', a);
 }
 
 function drawEndScreen() {
-  const t = Game.stateTime;
-  drawText(STRINGS.end.title, VIEW_W / 2, VIEW_H / 2 - 40,
-           '700 46px system-ui, sans-serif', 'center');
-  drawText(STRINGS.end.sub, VIEW_W / 2, VIEW_H / 2,
-           'italic 17px Georgia, serif', 'center', 0.9);
-  drawText(STRINGS.end.deaths(Game.deaths),
-           VIEW_W / 2, VIEW_H / 2 + 54, '600 17px system-ui, sans-serif', 'center');
+  const t = Game.stateTime, U = CONFIG.UI.end;
+  drawText(STRINGS.end.title, U.x, VIEW_H / 2 + U.titleYOff,
+           fontStr(CONFIG.FONTS.endTitle), 'center');
+  drawText(STRINGS.end.sub, U.x, VIEW_H / 2 + U.subYOff,
+           fontStr(CONFIG.FONTS.endLine), 'center', 0.9);
+  drawText(STRINGS.end.deaths(Game.deaths), U.x, VIEW_H / 2 + U.deathsYOff,
+           fontStr(CONFIG.FONTS.endLine), 'center');
   const pulse = 0.55 + 0.35 * Math.sin(t * 0.08);
-  drawText(STRINGS.end.restart,
-           VIEW_W / 2, VIEW_H / 2 + 100, '600 17px system-ui, sans-serif', 'center', pulse);
+  drawText(STRINGS.end.restart, U.x, VIEW_H / 2 + U.restartYOff,
+           fontStr(CONFIG.FONTS.endLine), 'center', pulse);
 }
 
 function drawFlash() {
@@ -1140,6 +1250,7 @@ function render() {
   drawPlayer(ctx, player);
   if (Game.debug) drawDebug();
   drawHUD();
+  if (Game.state === 'playing') drawNarrator(); // top-center band, never fades
   if (Game.state === 'complete') drawCompleteOverlay();
   drawFlash();
 }
@@ -1300,7 +1411,13 @@ function update() {
   if (Game.flash > 0) Game.flash--;
 
   // F2 toggles debug mode
-  if (Input.debugToggle) Game.debug = !Game.debug;
+  if (Input.debugToggle) {
+    Game.debug = !Game.debug;
+    if (!Game.debug) persianSmoke = false; // the smoke test belongs to debug view only
+  }
+
+  // P toggles the Persian smoke-test string in the narrator slot (debug only)
+  if (Input.persianToggle && Game.debug) persianSmoke = !persianSmoke;
 
   // debug-only level jumps: N = next, 1..6 = straight to that room
   if (Game.debug && Game.state === 'playing') {
@@ -1351,6 +1468,7 @@ function update() {
   Input.debugToggle = false;
   Input.debugSkip = false;
   Input.debugDigit = 0;
+  Input.persianToggle = false;
 }
 
 /* ============================= MAIN LOOP ================================= */
