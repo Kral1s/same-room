@@ -38,6 +38,7 @@
             L5 deathSpike · L6 jumpShift
      Act 2: L7 mirrorControls · L8 gravityFlip · L9 swapKeysOnJump
             L10 inputDelay · L11 noRepeatDirection · L12 speedByDoorDistance
+     Act 3: L13-L14 ghostEcho + heldGate · L15 ghostEcho (lethal chaser)
    ========================================================================== */
 
 /* ============================== CONFIG =================================== */
@@ -77,6 +78,16 @@ const CONFIG = {
       text:   '#cfd3e6',
       accent: '#f2c14e',
     },
+    3: {
+      bg:     '#121722',   // Act 3: cool bluish shift of the Act 1 theme
+      wall:   '#2a3550',
+      grid:   '#cfe0ff',   // bluish blueprint grid tint
+      player: '#f2f2f2',
+      door:   '#4cc9a7',
+      danger: '#ff4d5e',                          // danger is always the same
+      text:   '#cfd3e6',
+      accent: '#f2c14e',
+    },
   },
 
   // Rule knobs (per-rule gameplay numbers live here, not in level code).
@@ -88,6 +99,16 @@ const CONFIG = {
     timeScaleMin: 0.65, timeScaleMax: 1.5,
     timeScaleNear: 160, timeScaleFar: 900,  // px, center to center
     timeScaleSmooth: 0.05,                  // per-render-frame smoothing
+  },
+
+  // Act 3 ghost system: attempt recording + echo rules
+  GHOST: {
+    minFrames: 60,            // attempts shorter than this are not stored
+    maxFrames: 5400,          // recording cap (90 s)
+    alpha: 0.5,               // ghost opacity
+    helperTint: '#8fb3ff',    // harmless echo (holds buttons for you)
+    lethalTint: '#ff7a8a',    // killer echo (touches like a spike)
+    spawnImmunityRadius: 120, // lethal ghosts never kill this close to spawn
   },
 
   // Player look & hitbox in one place — the sprite will change later,
@@ -142,7 +163,7 @@ const CONFIG = {
       lineHeight: 1.25,       // relative to font size (two-line mode)
       pillColor: '#14161f', pillAlpha: 0.7, pillRadius: 14,
     },
-    debugInfo: { x: 16, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 70 / -46 / -28
+    debugInfo: { x: 16, yGhost: 626, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 94 / -70 / -46 / -28
     complete:  { x: 640, titleYOff: -8,  subYOff: 30 },   // offsets from VIEW_H/2
     end:       { x: 640, titleYOff: -40, subYOff: 0, deathsYOff: 54, restartYOff: 100 },
   },
@@ -294,9 +315,25 @@ const STRINGS = {
     12: {
       narrator: 'Easy one. The nearer the door, the faster the room.',
     },
+    13: {
+      narrator: 'Stand on the button. Press R. Let your past self do the standing.',
+    },
+    14: {
+      narrator: 'Two buttons. Two past selves. Do the math.',
+    },
+    15: {
+      narrator: 'Your old route is chasing you. Try not to meet it.',
+    },
   },
   debug: {
     rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
+    // Act 3 diagnostics: attempt frame, stored attempts, live ghosts
+    ghostState: (af, count, lens, ghostsTxt) =>
+      'attemptFrame: ' + af + ' \u00b7 past attempts: ' + count +
+      (lens ? ' [' + lens + ']' : '') + ' \u00b7 ghosts: ' + ghostsTxt,
+    ghostEntry: (i, on, x, y) =>
+      '#' + i + ' ' + (on ? 'on (' + x + ',' + y + ')' : 'off'),
+    ghostsNone: '(none)',
     deaths:    (n)   => 'deaths: ' + n,
     ruleState: (g, s, m, ts, d) =>
       'gravityDir: ' + g + ' · keysSwapped: ' + s +
@@ -385,7 +422,7 @@ window.addEventListener('blur', () => {
 /* ASCII legend:
      '#' wall          '^' spike (up)    'v' spike (down, hangs from ceilings)
      '.' empty         'P'  player start 'D' exit door (initial position)
-     'B' button        'G'  gate (solid while closed)
+     'B' button        'G'  gate (solid while closed)  'b' second button (heldGate)
      'S' spike slot    'M'  movable platform block (initial marker)
    Levels: { act, name, rules, grid, doorTarget?, shiftLanes?, narratorEvents? } */
 
@@ -696,6 +733,97 @@ const LEVELS = [
       "##########..#####..#############",
     ],
   },
+
+  // ---- Act 3: your own ghost ----
+  {
+    act: 3,
+    name: 'Stand-in',
+    rules: ['ghostEcho', 'heldGate'],
+    ghost: { count: 1, delay: 0, lethal: false, endBehavior: 'hold' },
+    grid: [ // flat and no hazards: button B near spawn, full-height gate col
+            // 16 seals the door route (gate top row 4: can never be jumped).
+            // Stand on B, press R: your echo takes over the standing.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#..P....B.......G..........D...#",
+      "################################",
+    ],
+  },
+  {
+    act: 3,
+    name: 'Double Duty',
+    rules: ['ghostEcho', 'heldGate'],
+    ghost: { count: 2, delay: 0, lethal: false, endBehavior: 'hold' },
+    grid: [ // B on the floor (left), b on a ledge up two wide steps; the gate
+            // opens only while BOTH are held. Attempt 1 stands on B, attempt 2
+            // climbs to b, attempt 3 walks through. No hazards at all.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...............G..............#",
+      "#...........b...G..............#",
+      "#..........###..G..............#",
+      "#...............G..............#",
+      "#.....####......G..............#",
+      "#..P.B..........G..........D...#",
+      "################################",
+    ],
+  },
+  {
+    act: 3,
+    name: 'Hunted',
+    rules: ['ghostEcho'],
+    ghost: { count: 1, delay: 120, lethal: true, endBehavior: 'vanish' },
+    grid: [ // two routes to the door: the risky low route jumps the 3-tile
+            // spike strip (c14-16; ~40px takeoff window, full arc apex 498px
+            // clears the row-10 shelf's 440px underside); the safe route climbs
+            // A r14 c6-10 -> B r12 c8-11 -> C r10 c14-17 -> D r12 c21-24 ->
+            // E r14 c24-28 and drops to the door. All stand platforms are
+            // >= 4 tiles wide; no dead ends. Your previous failed route replays
+            // 2 s behind you and kills on touch — never near spawn, and it
+            // vanishes when its tape ends.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#.............####.............#",
+      "#..............................#",
+      "#.......####.........####......#",
+      "#..............................#",
+      "#.....#####.............#####..#",
+      "#..............................#",
+      "#..P..........^^^...........D..#",
+      "################################",
+    ],
+  },
 ];
 
 // Parses a grid into runtime level data (spawn, door tile, special markers).
@@ -703,6 +831,7 @@ function parseLevelGrid(grid) {
   let spawn = null;
   let door = null;
   const buttons = [];    // 'B' tiles
+  const buttons2 = [];   // 'b' tiles (second held button; heldGate only)
   const gateTiles = [];  // 'G' tiles
   const sSlots = [];     // 'S' tiles (potential spike slots)
   const mTiles = [];     // 'M' initial positions
@@ -718,6 +847,8 @@ function parseLevelGrid(grid) {
         door = { tx, ty };
       } else if (c === 'B') {
         buttons.push({ tx, ty });
+      } else if (c === 'b') {
+        buttons2.push({ tx, ty });
       } else if (c === 'G') {
         gateTiles.push({ tx, ty });
       } else if (c === 'S') {
@@ -731,7 +862,7 @@ function parseLevelGrid(grid) {
   const spawnTile = spawn
     ? { col: Math.floor(spawn.x / TILE), row: Math.floor(spawn.y / TILE) }
     : null;
-  return { spawn, door, spawnTile, buttons, gateTiles, sSlots, mTiles };
+  return { spawn, door, spawnTile, buttons, buttons2, gateTiles, sSlots, mTiles };
 }
 
 /* ========================== PLAYER / PHYSICS ============================= */
@@ -905,6 +1036,29 @@ function samplePath() {
   });
 }
 
+/* --- Act 3 attempt recording ----------------------------------------------
+   Every playing frame the player's hitbox CENTER goes into Game.attemptRec
+   as flat x,y pairs (plain number array, capped at CONFIG.GHOST.maxFrames —
+   pure writes, zero allocations per frame). This is separate from
+   run.currentPath / lastWinPath / deathPoints, which stay exactly as-is. */
+function recordAttemptFrame() {
+  if (Game.attemptFrame >= CONFIG.GHOST.maxFrames) return;
+  const i = Game.attemptFrame * 2;
+  Game.attemptRec[i] = player.x + player.w / 2;
+  Game.attemptRec[i + 1] = player.y + player.h / 2;
+  Game.attemptFrame++;
+}
+
+/* An attempt ends on death or on manual restart (R): tapes of at least
+   minFrames frames move into pastAttempts (newest last, at most 6 kept).
+   Attempts ending by WINNING are never stored (onPlayerWin doesn't call this).
+   pastAttempts is cleared on level load, never on respawn. */
+function endAttemptRecording() {
+  if (Game.attemptFrame >= CONFIG.GHOST.minFrames)
+    Game.pastAttempts.push(Game.attemptRec.slice(0, Game.attemptFrame * 2));
+  while (Game.pastAttempts.length > 6) Game.pastAttempts.shift();
+}
+
 /* The input after rules are applied (e.g. mirrorControls). Built fresh each
    playing update from the raw Input, so rules never mutate real key state.
    Jump press/release EDGES are copied through too (inputDelay needs them);
@@ -1023,6 +1177,7 @@ function updatePlayer(eff) {
    array; every hook is optional:
      onLevelStart(game)      after the level (and all rule state) reset
      onAttemptStart(game)    on level load AND on every respawn/restart
+     onRespawn(game)         same timing, after onAttemptStart (Act 3 ghosts)
      onUpdate(game)          each fixed update while playing
      modifyInput(input,game) transforms {left,right,jumpHeld} before physics
      onDraw(ctx,game)        draw world-layer effects (under the player)
@@ -1031,6 +1186,10 @@ function updatePlayer(eff) {
      getTimeScale(game)      room-time multiplier for the main loop (default 1)
    New rule later = one entry here + its id in a level's rules array.
    Per-level rule state lives in game.ruleVars.<ruleId> (reset on load).    */
+
+// Ghost rendering: one reusable pseudo-player object passed to drawPlayer
+// (onGround=true keeps the squash/blink timers neutral). No allocations.
+const ghostView = { x: 0, y: 0, w: 28, h: 28, vx: 0, vy: 0, onGround: true };
 
 const RULES = {
   /* Your previous winning path turns into lava. */
@@ -1462,6 +1621,217 @@ const RULES = {
       return v.ts;
     },
   },
+
+  /* ACT 3 core: replays recent stored attempts as translucent echo players.
+     level.ghost = { count, delay, lethal, endBehavior, reverse, killable,
+                     pressesButtons } — defaults: 1 / 0 / false / 'hold' /
+                     false / true / true (killable is reserved, unused so far).
+     Ghosts are rebuilt at every attempt start (onRespawn) from the LAST
+     `count` tapes of game.pastAttempts (fewer when fewer exist). A ghost is a
+     28x28 hitbox centered on the replayed position of attempt frame t, with
+     k = t - delay: k<0 inactive; k<=len-1 replays (reverse: rec[len-1-k]);
+     past the end: 'hold' keeps the final (reverse: first) position, 'vanish'
+     deactivates. Lethal ghosts kill exactly like spikes, but never while
+     within spawnImmunityRadius of the level's player start. */
+  ghostEcho: {
+    onLevelStart(game) {
+      game.ruleVars.ghostEcho = { ghosts: [] };
+    },
+    onRespawn(game) { // level load AND every respawn/R (new tapes included)
+      const v = game.ruleVars.ghostEcho;
+      const def = game.level.def.ghost || {};
+      const count = def.count === undefined ? 1 : def.count;
+      const past = game.pastAttempts;
+      const n = Math.min(count, past.length);
+      v.ghosts.length = 0;
+      for (let i = 0; i < n; i++) {
+        const rec = past[past.length - n + i]; // window, oldest first
+        v.ghosts.push({
+          rec, len: rec.length / 2,
+          delay: def.delay || 0,
+          reverse: !!def.reverse,
+          endBehavior: def.endBehavior || 'hold',
+          lethal: !!def.lethal,
+          killable: def.killable === undefined ? true : def.killable,
+          pressesButtons:
+            def.pressesButtons === undefined ? true : def.pressesButtons,
+          active: false, cx: 0, cy: 0,
+        });
+      }
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.ghostEcho;
+      const n = v.ghosts.length;
+      if (!n) return;
+      const t = game.attemptFrame;
+      for (let i = 0; i < n; i++) {
+        const g = v.ghosts[i];
+        const k = t - g.delay;
+        if (k < 0) { g.active = false; continue; }
+        let idx;
+        if (k <= g.len - 1) idx = g.reverse ? g.len - 1 - k : k;
+        else if (g.endBehavior === 'vanish') { g.active = false; continue; }
+        else idx = g.reverse ? 0 : g.len - 1;          // 'hold'
+        g.active = true;
+        g.cx = g.rec[idx * 2];
+        g.cy = g.rec[idx * 2 + 1];
+      }
+      // lethal overlap: same death handling as spikes, spawn-immunity excepted
+      const sx = game.level.spawn.x + player.w / 2;
+      const sy = game.level.spawn.y + player.h / 2;
+      const r2 = CONFIG.GHOST.spawnImmunityRadius * CONFIG.GHOST.spawnImmunityRadius;
+      for (let i = 0; i < n; i++) {
+        const g = v.ghosts[i];
+        if (!g.lethal || !g.active) continue;
+        const dx = g.cx - sx, dy = g.cy - sy;
+        if (dx * dx + dy * dy <= r2) continue;         // spawn immunity
+        if (rectsOverlap(player.x, player.y, player.w, player.h,
+                         g.cx - 14, g.cy - 14, 28, 28)) {
+          onPlayerDeath();
+          break; // respawn rebuilt v.ghosts — stop iterating this frame
+        }
+      }
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.ghostEcho;
+      if (!v.ghosts.length) return;
+      const G = CONFIG.GHOST;
+      // drawPlayer owns the live player's global squash/blink timers; save and
+      // restore them so drawing ghosts never disturbs the player's own look.
+      const s0 = pvWasGrounded, s1 = pvLandT, s2 = pvBlinkF, s3 = pvBlinkT;
+      for (let i = 0; i < v.ghosts.length; i++) {
+        const g = v.ghosts[i];
+        if (!g.active) continue;
+        ghostView.x = g.cx - 14;
+        ghostView.y = g.cy - 14;
+        drawPlayer(ctx, ghostView, {
+          alpha: G.alpha,
+          tintColor: g.lethal ? G.lethalTint : G.helperTint,
+          eyesOff: true,
+        });
+      }
+      pvWasGrounded = s0; pvLandT = s1; pvBlinkF = s2; pvBlinkT = s3;
+    },
+  },
+
+  /* Held buttons: 'B' plus the second kind 'b'. The gate stays open while
+     EVERY button is overlapped at the same time — by the player or by an
+     active ghost that pressesButtons — and a gate never closes while the
+     player's or any ghost's hitbox overlaps one of its tiles (nothing ever
+     crushed). State recomputes every update and resets on respawn. Fully
+     independent of level 3's latched buttonGate. */
+  heldGate: {
+    onLevelStart(game) {
+      game.gatesClosed = true;
+      const total = game.level.buttons.length + game.level.buttons2.length;
+      game.ruleVars.heldGate = { pressed: new Array(total).fill(false) };
+    },
+    onAttemptStart(game) {
+      game.gatesClosed = true;
+      const v = game.ruleVars.heldGate;
+      for (let i = 0; i < v.pressed.length; i++) v.pressed[i] = false;
+    },
+    _buttonOver(game, b) {
+      // same overlap test as the level-3 button plate
+      if (rectsOverlap(player.x, player.y, player.w, player.h,
+                       b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
+        return true;
+      const ge = game.ruleVars.ghostEcho;
+      if (!ge) return false;
+      for (let i = 0; i < ge.ghosts.length; i++) {
+        const g = ge.ghosts[i];
+        if (!g.active || !g.pressesButtons) continue;
+        if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
+                         b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
+          return true;
+      }
+      return false;
+    },
+    _anyoneOnGate(game) {
+      const ge = game.ruleVars.ghostEcho;
+      for (const t of game.level.gateTiles) {
+        if (rectsOverlap(player.x, player.y, player.w, player.h,
+                         t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
+        if (!ge) continue;
+        for (const g of ge.ghosts) {
+          if (!g.active) continue;
+          if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
+                           t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
+        }
+      }
+      return false;
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.heldGate;
+      let all = true, i = 0;
+      for (const b of game.level.buttons) {
+        const p = this._buttonOver(game, b);
+        v.pressed[i++] = p;
+        all = all && p;
+      }
+      for (const b of game.level.buttons2) {
+        const p = this._buttonOver(game, b);
+        v.pressed[i++] = p;
+        all = all && p;
+      }
+      if (all) game.gatesClosed = false;
+      else if (!game.gatesClosed && !this._anyoneOnGate(game))
+        game.gatesClosed = true; // closes only once nobody stands in the tiles
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.heldGate;
+      // button plates: accent on the floor; pressed = flattened and brighter
+      let i = 0;
+      const plates = game.level.buttons.concat(game.level.buttons2);
+      for (const b of plates) {
+        const x = b.tx * TILE, y = b.ty * TILE;
+        const on = v.pressed[i++];
+        ctx.fillStyle = COLORS.accent;
+        if (on) {
+          ctx.fillRect(x + 4, y + 32, TILE - 8, 8);     // sunk flat, full bright
+        } else {
+          ctx.globalAlpha = 0.8;
+          ctx.fillRect(x + 4, y + 24, TILE - 8, 16);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = COLORS.bg;
+          ctx.fillRect(x + 4, y + 24, TILE - 8, 3);
+        }
+      }
+      // gate tiles: solid while closed, faint outline while open (level-3 look)
+      let topY = Infinity, gateX = 0;
+      for (const t of game.level.gateTiles) {
+        const x = t.tx * TILE, y = t.ty * TILE;
+        gateX = x;
+        if (y < topY) topY = y;
+        if (game.gatesClosed) {
+          ctx.fillStyle = COLORS.text;
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = COLORS.wall;
+          ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+        } else {
+          ctx.globalAlpha = 0.22;
+          ctx.strokeStyle = COLORS.text;
+          ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+          ctx.globalAlpha = 1;
+        }
+      }
+      // indicator lights: one 8px square per button just above the gate's top
+      // tile (y = gateTop - 12 = 148 on these rooms — below y 40-140, so
+      // outside the narrator zone; the pill never overlaps them)
+      if (game.level.gateTiles.length) {
+        for (let k = 0; k < plates.length; k++) {
+          const lx = gateX + 4 + k * 12, ly = topY - 12;
+          if (v.pressed[k]) {
+            ctx.fillStyle = COLORS.accent;
+            ctx.fillRect(lx, ly, 8, 8);
+          } else {
+            ctx.strokeStyle = COLORS.accent;
+            ctx.strokeRect(lx + 0.5, ly + 0.5, 7, 7);
+          }
+        }
+      }
+    },
+  },
 };
 
 /* ============================ BACKGROUNDS ================================ */
@@ -1556,6 +1926,12 @@ function drawBGAct2Static(g, w, h) {
   paintBGStatic(g, w, h, T.bg, T.grid);
 }
 
+// act 3 static: same layout, THEMES[3] cool blue base + grid tint
+function drawBGAct3Static(g, w, h) {
+  const T = CONFIG.THEMES[3];
+  paintBGStatic(g, w, h, T.bg, T.grid);
+}
+
 // --- act 1: living wall (dynamic) — tally marks, win-path trail, death pulse ---
 function drawBGAct1Dynamic(g, game, t) {
   const T = CONFIG.BG.tally, Z = CONFIG.BG.narratorZone;
@@ -1647,6 +2023,8 @@ const BACKGROUNDS = {
   1: { drawStatic: drawBGAct1Static, drawDynamic: drawBGAct1Dynamic },
   // act 2 reuses the act 1 look (grid + vignette + living wall), violet-tinted
   2: { drawStatic: drawBGAct2Static, drawDynamic: drawBGAct1Dynamic },
+  // act 3 reuses the act 1 look (grid + vignette + living wall), blue-tinted
+  3: { drawStatic: drawBGAct3Static, drawDynamic: drawBGAct1Dynamic },
 };
 
 /* ============================= RENDERING ================================= */
@@ -2102,6 +2480,24 @@ function drawDebug() {
   }
   ctx.lineWidth = 1;
 
+  // Act 3: attempt recording + ghost diagnostics
+  const geDbg = Game.ruleVars.ghostEcho;
+  const lensDbg = Game.pastAttempts.map(a => a.length / 2).join(','); // debug-only
+  let ghostDbg = STRINGS.debug.ghostsNone;
+  if (geDbg && geDbg.ghosts.length) {
+    const parts = [];
+    for (let i = 0; i < geDbg.ghosts.length; i++) {
+      const g = geDbg.ghosts[i];
+      parts.push(STRINGS.debug.ghostEntry(i, g.active,
+        Math.round(g.cx), Math.round(g.cy)));
+    }
+    ghostDbg = parts.join(' | ');
+  }
+  drawText(STRINGS.debug.ghostState(Game.attemptFrame,
+             Game.pastAttempts.length, lensDbg, ghostDbg),
+           CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yGhost,
+           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+
   // corner info: live rule state + active rules + deaths
   drawText(STRINGS.debug.ruleState(Game.gravityDir, Game.keysSwapped,
            Game.lastMoveDir, Game.timeScale, Game.inputDelayOn),
@@ -2255,6 +2651,10 @@ const Game = {
   lastMoveDir: null,    // noRepeatDirection rule: null / -1 / 1
   inputDelayOn: false,  // cached: current level uses the inputDelay rule
   timeScale: 1,         // room-time multiplier applied this frame (debug view)
+  // --- Act 3 attempt recording (ghost system) ---
+  attemptRec: [],       // flat [x0,y0,x1,y1,...] hitbox-center tape, THIS attempt
+  attemptFrame: 0,      // frames since the current attempt started
+  pastAttempts: [],     // finished tapes (newest last, cap 6; wins never stored)
   debug: false,         // F2
   run: {
     currentPath: [],    // positions of the attempt in progress
@@ -2291,6 +2691,9 @@ function attemptStart(game) {
   for (const rule of game.activeRules) {
     if (rule.onAttemptStart) rule.onAttemptStart(game);
   }
+  for (const rule of game.activeRules) {
+    if (rule.onRespawn) rule.onRespawn(game); // level load AND every respawn/R
+  }
 }
 
 function loadLevel(index) {
@@ -2305,6 +2708,7 @@ function loadLevel(index) {
     door: parsed.door,          // door TILE (initial position; protections use it)
     spawnTile: parsed.spawnTile,
     buttons: parsed.buttons,
+    buttons2: parsed.buttons2,
     gateTiles: parsed.gateTiles,
     sSlots: parsed.sSlots,
     rules: def.rules,
@@ -2343,6 +2747,10 @@ function loadLevel(index) {
   // starting a new attempt's path (lastWinPath & deathPoints persist)
   Game.run.currentPath = [];
   Game.run.pathTick = 0;
+  // Act 3: stored tapes never carry over to another level; fresh attempt tape
+  Game.pastAttempts.length = 0;
+  Game.attemptRec.length = 0;
+  Game.attemptFrame = 0;
   for (const rule of Game.activeRules) {
     if (rule.onLevelStart) rule.onLevelStart(Game);
   }
@@ -2354,6 +2762,7 @@ function loadLevel(index) {
 // a manual restart (R) with no death penalty. Either way a new attempt starts
 // with an empty currentPath.
 function restartAttempt(died) {
+  endAttemptRecording(); // the attempt that just ended (death or R)
   if (died) {
     // record the death point of the attempt that just ended
     Game.run.deathPoints.push({
@@ -2372,6 +2781,8 @@ function restartAttempt(died) {
   }
   Game.run.currentPath = [];
   Game.run.pathTick = 0;
+  Game.attemptRec.length = 0; // fresh tape for the new attempt
+  Game.attemptFrame = 0;
   resetPlayerToSpawn();
   Game.attempt++;
   attemptStart(Game); // per-attempt state resets on respawn
@@ -2459,6 +2870,7 @@ function update() {
           if (rule.onUpdate) rule.onUpdate(Game);
         }
         samplePath();
+        recordAttemptFrame(); // Act 3 ghost tape (writes only; physics untouched)
       }
       break;
     case 'complete':
