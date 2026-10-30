@@ -39,6 +39,7 @@
      Act 2: L7 mirrorControls · L8 gravityFlip · L9 swapKeysOnJump
             L10 inputDelay · L11 noRepeatDirection · L12 speedByDoorDistance
      Act 3: L13-L14 ghostEcho + heldGate · L15 ghostEcho (lethal chaser)
+            L16 reverse ghostEcho · L17 deathPlatforms · L18 scriptedGhost
    ========================================================================== */
 
 /* ============================== CONFIG =================================== */
@@ -99,6 +100,7 @@ const CONFIG = {
     timeScaleMin: 0.65, timeScaleMax: 1.5,
     timeScaleNear: 160, timeScaleFar: 900,  // px, center to center
     timeScaleSmooth: 0.05,                  // per-render-frame smoothing
+    deathPlatformMax: 12,    // deathPlatforms: total convertibles per level
   },
 
   // Act 3 ghost system: attempt recording + echo rules
@@ -163,7 +165,7 @@ const CONFIG = {
       lineHeight: 1.25,       // relative to font size (two-line mode)
       pillColor: '#14161f', pillAlpha: 0.7, pillRadius: 14,
     },
-    debugInfo: { x: 16, yGhost: 626, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 94 / -70 / -46 / -28
+    debugInfo: { x: 16, yAct3: 602, yGhost: 626, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 118 / -94 / -70 / -46 / -28
     complete:  { x: 640, titleYOff: -8,  subYOff: 30 },   // offsets from VIEW_H/2
     end:       { x: 640, titleYOff: -40, subYOff: 0, deathsYOff: 54, restartYOff: 100 },
   },
@@ -324,6 +326,15 @@ const STRINGS = {
     15: {
       narrator: 'Your old route is chasing you. Try not to meet it.',
     },
+    16: {
+      narrator: 'Your past self is playing in reverse. Be patient with it.',
+    },
+    17: {
+      narrator: 'Every death leaves something behind. Use it.',
+    },
+    18: {
+      narrator: 'A ghost guards the door. Be rude.',
+    },
   },
   debug: {
     rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
@@ -334,6 +345,12 @@ const STRINGS = {
     ghostEntry: (i, on, x, y) =>
       '#' + i + ' ' + (on ? 'on (' + x + ',' + y + ')' : 'off'),
     ghostsNone: '(none)',
+    // STEP 5B: deathPlatforms count, scripted-ghost state, heldGate mode
+    act3State: (dp, sc, gm) =>
+      'dead platforms: ' + dp + ' \u00b7 scripted ghost: ' + sc +
+      ' \u00b7 gate mode: ' + gm,
+    ghostAlive: 'alive', ghostKilled: 'killed', fieldNone: '-',
+    gateModeNormal: 'normal',
     deaths:    (n)   => 'deaths: ' + n,
     ruleState: (g, s, m, ts, d) =>
       'gravityDir: ' + g + ' · keysSwapped: ' + s +
@@ -824,6 +841,108 @@ const LEVELS = [
       "################################",
     ],
   },
+
+  {
+    act: 3,
+    name: 'Rewind',
+    rules: ['ghostEcho', 'heldGate'],
+    ghost: { count: 1, delay: 0, lethal: false, endBehavior: 'hold', reverse: true },
+    grid: [ // no hazards. The echo replays your previous attempt BACKWARDS:
+            // it starts where you ended (on the button) and holds the button
+            // for exactly as long as you stood there, then walks home.
+            // PHYSICS MINIMUM: spawn (x126) -> past the gate (col 15, x 640)
+            // takes ~135 frames (~2.25 s) at run speed 4 px/f with the 0.7
+            // accel ramp. So attempt 1 must stand on B for >= ~150 frames
+            // (2.5 s); ~5 s of standing is comfortable and matches the
+            // narrator's pace. A too-short wait leaves the gate closed on
+            // arrival — press R (or wait on B longer next attempt) to retry.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..............G...............#",
+      "#..P......B....G........D......#",
+      "################################",
+    ],
+  },
+  {
+    act: 3,
+    name: 'Scar Tissue',
+    rules: ['deathPlatforms'],
+    grid: [ // the middle spike field is 9 tiles wide (cols 12-20): max jump
+            // distance is ~188 px (~4.7 tiles), so it can never be jumped.
+            // Every spike death converts the death cell +/- spike neighbors
+            // into floor blocks; running in blindly opens the corridor in
+            // about 8-9 deaths, aimed jumps into the middle do it in ~3.
+            // Spawn/door keep a 3-tile clear radius; never unsolvable.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#..P........^^^^^^^^^......D...#",
+      "################################",
+    ],
+  },
+  {
+    act: 3,
+    name: 'Be Rude',
+    rules: ['scriptedGhost', 'heldGate'],
+    ghostScript: { col: 13, row: 14 },
+    gateMode: 'closedWhilePressed',
+    grid: [ // EASY breather: the guard ghost stands on B atop a thin pillar
+            // (c13 r15; inverted gate: CLOSED while any button is pressed).
+            // One full hop (jump held through the arc) inside the wide floor
+            // window x~126..230 lands on ledge A (c7-11, top y560); walk right
+            // off its edge and the fall-drift lands ON the ghost (ledge feet
+            // 560 < its top 572 -> always a valid stomp). It bursts and B
+            // comes free; you drop to the floor and walk right to the door.
+            // B's plate (y 584..600) hangs high above the floor route: never
+            // pressed by walking under it (optional floor hops only graze it
+            // rising, vy<0 => never a kill), so no-kill runs stay locked.
+            // Two decorative spikes sit past the door, off the route.
+      "################################",
+      "#..............................#",
+      "#..............................#",
+      "#..............................#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#........................G.....#",
+      "#......#####.B...........G.....#",
+      "#............#...........G.....#",
+      "#..P.....................G.D.^^#",
+      "################################",
+    ],
+  },
 ];
 
 // Parses a grid into runtime level data (spawn, door tile, special markers).
@@ -1144,6 +1263,7 @@ function updatePlayer(eff) {
                        tx * TILE + SPIKE_INSET_X, ty * TILE + SPIKE_INSET_TOP,
                        TILE - SPIKE_INSET_X * 2, TILE - SPIKE_INSET_TOP)) {
         dead = true;
+        Game.lastDeathCause = 'spike';
         onPlayerDeath();
       }
     } else if (c === 'v') { // same shrunken hitbox, mirrored top-to-bottom
@@ -1151,6 +1271,7 @@ function updatePlayer(eff) {
                        tx * TILE + SPIKE_INSET_X, ty * TILE,
                        TILE - SPIKE_INSET_X * 2, TILE - SPIKE_INSET_TOP)) {
         dead = true;
+        Game.lastDeathCause = 'spike';
         onPlayerDeath();
       }
     }
@@ -1161,6 +1282,7 @@ function updatePlayer(eff) {
     forEachOverlappedTile((tx, ty) => {
       if (dead || !Game.hazards.has(tx + ',' + ty)) return;
       dead = true;
+      Game.lastDeathCause = 'hazard';
       onPlayerDeath();
     });
   }
@@ -1687,6 +1809,7 @@ const RULES = {
         if (dx * dx + dy * dy <= r2) continue;         // spawn immunity
         if (rectsOverlap(player.x, player.y, player.w, player.h,
                          g.cx - 14, g.cy - 14, 28, 28)) {
+          Game.lastDeathCause = 'ghost';
           onPlayerDeath();
           break; // respawn rebuilt v.ghosts — stop iterating this frame
         }
@@ -1737,27 +1860,38 @@ const RULES = {
                        b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
         return true;
       const ge = game.ruleVars.ghostEcho;
-      if (!ge) return false;
-      for (let i = 0; i < ge.ghosts.length; i++) {
-        const g = ge.ghosts[i];
-        if (!g.active || !g.pressesButtons) continue;
-        if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
-                         b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
-          return true;
+      if (ge) {
+        for (let i = 0; i < ge.ghosts.length; i++) {
+          const g = ge.ghosts[i];
+          if (!g.active || !g.pressesButtons) continue;
+          if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
+                           b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
+            return true;
+        }
       }
+      const sg = game.ruleVars.scriptedGhost; // level 18: standing guard ghost
+      if (sg && sg.alive &&
+          rectsOverlap(sg.cx - 14, sg.cy - 14, 28, 28,
+                       b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16))
+        return true;
       return false;
     },
     _anyoneOnGate(game) {
       const ge = game.ruleVars.ghostEcho;
+      const sg = game.ruleVars.scriptedGhost;
       for (const t of game.level.gateTiles) {
         if (rectsOverlap(player.x, player.y, player.w, player.h,
                          t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
-        if (!ge) continue;
-        for (const g of ge.ghosts) {
-          if (!g.active) continue;
-          if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
-                           t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
+        if (ge) {
+          for (const g of ge.ghosts) {
+            if (!g.active) continue;
+            if (rectsOverlap(g.cx - 14, g.cy - 14, 28, 28,
+                             t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
+          }
         }
+        if (sg && sg.alive &&
+            rectsOverlap(sg.cx - 14, sg.cy - 14, 28, 28,
+                         t.tx * TILE, t.ty * TILE, TILE, TILE)) return true;
       }
       return false;
     },
@@ -1773,6 +1907,17 @@ const RULES = {
         const p = this._buttonOver(game, b);
         v.pressed[i++] = p;
         all = all && p;
+      }
+      // level.gateMode = 'closedWhilePressed' inverts the gate (level 18):
+      // CLOSED while any button is pressed, OPEN while none is.
+      if (game.level.def.gateMode === 'closedWhilePressed') {
+        let any = false; // no closures in the per-frame path
+        for (let k = 0; k < v.pressed.length; k++) any = any || v.pressed[k];
+        if (any) {
+          if (!game.gatesClosed && !this._anyoneOnGate(game))
+            game.gatesClosed = true; // still never close onto anyone
+        } else game.gatesClosed = false;
+        return;
       }
       if (all) game.gatesClosed = false;
       else if (!game.gatesClosed && !this._anyoneOnGate(game))
@@ -1829,6 +1974,126 @@ const RULES = {
             ctx.strokeRect(lx + 0.5, ly + 0.5, 7, 7);
           }
         }
+      }
+    },
+  },
+
+  /* Spike deaths pave the room (level 17): the cell holding the player's
+     hitbox center at death, plus its horizontal NEIGHBORS that are spike
+     cells ('^'/'v'), become solid platform cells (dynamic mSolid layer, same
+     as gates/movable blocks). Converted spikes vanish from the level copy.
+     Never within 3 tiles (Chebyshev) of spawn/door, never walls, at most
+     CONFIG.RULES.deathPlatformMax cells per level; they persist across
+     respawns and reset only on level load (no onAttemptStart reset here). */
+  deathPlatforms: {
+    onLevelStart(game) {
+      game.ruleVars.deathPlatforms = { cells: [] }; // {col,row,born}
+    },
+    onDeath(game) {
+      if (game.lastDeathCause !== 'spike') return;
+      const v = game.ruleVars.deathPlatforms;
+      const st = game.level.spawnTile, dr = game.level.door;
+      const cx = Math.floor((player.x + player.w / 2) / TILE);
+      const cy = Math.floor((player.y + player.h / 2) / TILE);
+      const tryConvert = (c, r, mustBeSpike) => {
+        if (v.cells.length >= CONFIG.RULES.deathPlatformMax) return;
+        const ch = game.level.tiles[r][c];
+        if (ch === '#' || ch === 'G') return;                 // walls stay
+        if (mustBeSpike && ch !== '^' && ch !== 'v') return;  // neighbors: spikes only
+        if (Math.max(Math.abs(c - st.col), Math.abs(r - st.row)) <= 3) return;
+        if (Math.max(Math.abs(c - dr.tx), Math.abs(r - dr.ty)) <= 3) return;
+        const key = c + ',' + r;
+        if (game.mSolid.has(key)) return;                     // already converted
+        game.mSolid.add(key);
+        if (ch === '^' || ch === 'v') { // the spike physically disappears
+          const row = game.level.tiles[r];
+          game.level.tiles[r] = row.slice(0, c) + '.' + row.slice(c + 1);
+          // drop it from the danger-eyes cache too (visual-only list)
+          staticDangerTiles = staticDangerTiles.filter(t =>
+            !(t.c === c && t.r === r));
+        }
+        v.cells.push({ col: c, row: r, born: game.stateTime });
+      };
+      tryConvert(cx, cy, false);
+      tryConvert(cx - 1, cy, true);
+      tryConvert(cx + 1, cy, true);
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.deathPlatforms;
+      if (!v.cells.length) return;
+      for (const c of v.cells) {
+        const x = c.col * TILE, y = c.row * TILE;
+        const pop = Math.min(1, (game.stateTime - c.born) / 9); // ~150 ms pop-in
+        const h = TILE * pop;
+        ctx.fillStyle = COLORS.wall;
+        ctx.fillRect(x, y + TILE - h, TILE, h);
+        ctx.globalAlpha = 0.45 * pop;
+        ctx.fillStyle = COLORS.danger;
+        ctx.fillRect(x, y + TILE - h, TILE, 3); // heat stripe on the new step
+        ctx.globalAlpha = 1;
+      }
+    },
+  },
+
+  /* A hand-placed, killable ghost guard (level 18): stands at
+     def.ghostScript = {col,row} every attempt, presses buttons, not lethal.
+     STOMP: dies when overlapping the player while the player moves toward the
+     ground (current gravity) AND last frame's feet were above the ghost's top
+     edge. No player bounce; side contact does nothing. Kill plays a short
+     tint burst and the ghost stays gone until the next respawn. */
+  scriptedGhost: {
+    onLevelStart(game) {
+      game.ruleVars.scriptedGhost =
+        { alive: false, cx: 0, cy: 0, prevFeetY: 0, burst: [] };
+    },
+    onRespawn(game) { // level load AND every respawn: the guard returns
+      const sc = game.level.def.ghostScript;
+      const v = game.ruleVars.scriptedGhost;
+      v.alive = true;
+      v.cx = sc.col * TILE + TILE / 2;
+      v.cy = (sc.row + 1) * TILE - 14; // feet exactly on the tile row below
+      v.prevFeetY = player.y + player.h;
+      v.burst.length = 0;
+    },
+    onUpdate(game) {
+      const v = game.ruleVars.scriptedGhost;
+      if (v.alive) {
+        const falling = player.vy * game.gravityDir > 0.01; // toward the ground
+        const above = v.prevFeetY <= v.cy - 14 + 0.5;       // feet above its top
+        if (rectsOverlap(player.x, player.y, player.w, player.h,
+                         v.cx - 14, v.cy - 14, 28, 28) && falling && above) {
+          v.alive = false;
+          v.burst.length = 0;
+          for (let i = 0; i < 9; i++) { // 9 small tint squares, ~300 ms
+            const a = Math.random() * Math.PI * 2;
+            const sp = 1.2 + Math.random() * 2.4;
+            v.burst.push({ x: v.cx, y: v.cy, vx: Math.cos(a) * sp,
+                           vy: Math.sin(a) * sp - 1.5, t0: game.stateTime });
+          }
+        }
+      }
+      v.prevFeetY = player.y + player.h;
+    },
+    onDraw(ctx, game) {
+      const v = game.ruleVars.scriptedGhost;
+      if (v.alive) { // same echo rendering as ghostEcho: helper tint, no eyes
+        const s0 = pvWasGrounded, s1 = pvLandT, s2 = pvBlinkF, s3 = pvBlinkT;
+        ghostView.x = v.cx - 14;
+        ghostView.y = v.cy - 14;
+        drawPlayer(ctx, ghostView, {
+          alpha: CONFIG.GHOST.alpha,
+          tintColor: CONFIG.GHOST.helperTint,
+          eyesOff: true,
+        });
+        pvWasGrounded = s0; pvLandT = s1; pvBlinkF = s2; pvBlinkT = s3;
+      }
+      for (const b of v.burst) { // burst squares, ~18 frames
+        const age = game.stateTime - b.t0;
+        if (age > 18) continue;
+        ctx.globalAlpha = 1 - age / 18;
+        ctx.fillStyle = CONFIG.GHOST.helperTint;
+        ctx.fillRect(b.x + b.vx * age - 2, b.y + b.vy * age - 2, 4, 4);
+        ctx.globalAlpha = 1;
       }
     },
   },
@@ -2480,6 +2745,18 @@ function drawDebug() {
   }
   ctx.lineWidth = 1;
 
+  // STEP 5B: deathPlatform count + scripted-ghost state + gate mode
+  const dpDbg = Game.ruleVars.deathPlatforms;
+  const sgDbg = Game.ruleVars.scriptedGhost;
+  drawText(STRINGS.debug.act3State(
+             dpDbg ? dpDbg.cells.length : 0,
+             sgDbg ? (sgDbg.alive ? STRINGS.debug.ghostAlive
+                                  : STRINGS.debug.ghostKilled)
+                   : STRINGS.debug.fieldNone,
+             Game.level.def.gateMode || STRINGS.debug.gateModeNormal),
+           CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yAct3,
+           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+
   // Act 3: attempt recording + ghost diagnostics
   const geDbg = Game.ruleVars.ghostEcho;
   const lensDbg = Game.pastAttempts.map(a => a.length / 2).join(','); // debug-only
@@ -2651,6 +2928,7 @@ const Game = {
   lastMoveDir: null,    // noRepeatDirection rule: null / -1 / 1
   inputDelayOn: false,  // cached: current level uses the inputDelay rule
   timeScale: 1,         // room-time multiplier applied this frame (debug view)
+  lastDeathCause: null,  // 'spike' | 'hazard' | 'ghost' (set at the kill site)
   // --- Act 3 attempt recording (ghost system) ---
   attemptRec: [],       // flat [x0,y0,x1,y1,...] hitbox-center tape, THIS attempt
   attemptFrame: 0,      // frames since the current attempt started
@@ -2737,6 +3015,7 @@ function loadLevel(index) {
   Game.ruleVars = {};
   Game.door = { x: parsed.door.tx * TILE, y: parsed.door.ty * TILE, w: TILE, h: TILE };
   Game.justJumped = false;
+  Game.lastDeathCause = null;
   Game.activeRules = def.rules
     .map(id => RULES[id] || console.warn('Unknown rule id:', id))
     .filter(Boolean);
