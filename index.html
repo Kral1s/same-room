@@ -167,13 +167,25 @@ const CONFIG = {
 
   // Spike look knobs (painting only — geometry and hitboxes are untouched).
   SPIKE: {
-    base: '#8a1c2b',     // gradient base
-    tip: '#ff4d5e',      // gradient tip
-    tipHi: '#ffd6da',    // tip highlight + glint color
-    edge: 'rgba(255, 214, 218, 0.5)',  // one lighter edge line per tooth
-    haloColor: '#ff4d5e', haloAlpha: 0.13, haloPulse: 0.03, haloRate: 0.02,
-    glintMin: 240, glintMax: 480,  // one gentle glint every 4-8 s per tile
-    glintFrames: 18, glintAlpha: 0.5,
+    steelLight: '#b8bedc',  // each tooth's left half
+    steelDark: '#7b82a6',   // each tooth's right half
+    hotLight: '#ff5a36',    // hot tip, left half
+    hotDark: '#d94422',     // hot tip, right half
+    tipRatio: 0.35,         // hot tip = top 35% of a tooth (same apex/slopes)
+    glint: true,            // master switch for the gentle edge glint
+    glintColor: '#e8ecff', glintAlpha: 0.45,
+    glintMin: 240, glintMax: 480, glintFrames: 18, // 4-8 s apart, ~300 ms fade
+  },
+
+  // Door look + win effects (painting only — game.door hitbox untouched).
+  DOOR: {
+    frame: '#4cc9a7', opening: '#0d3b31', depth: '#1f7a64',
+    inset1: 0.12, minInset: 3,  // opening inset per side (fraction of w / min px)
+    inset2: 0.25,               // depth layer inset per side (further fraction of w)
+    winAnim: true,              // visual win effect; false restores the old instant look
+    winShrinkFrames: 18,        // player shrinks into the door (~300 ms)
+    winRingFrames: 9,           // then one soft teal ring fades (~150 ms)
+    winRingColor: '#4cc9a7', winRingMaxR: 26,
   },
 
   DEATH_FREEZE_FRAMES: 8,  // brief hitstop after dying (~130 ms)
@@ -900,13 +912,19 @@ const RULES = {
     },
     onDraw(ctx, game) {
       const v = game.ruleVars.shyDoor;
-      if (!v.moving) return;
-      const a = 0.35 + 0.3 * Math.sin(game.stateTime * 0.25);
-      ctx.globalAlpha = a;
+      if (!v.moving) return; // only while the door actually creeps (unchanged)
+      // arch-shaped pulse around the door's outer frame — same path as the
+      // sprite (doorArchPath), stroked just inside the rect bounds. A slow
+      // 1-second breathing cycle keeps it gentle: no strobing, no fill/glow.
+      const s = Math.sin(game.stateTime * (Math.PI * 2 / 60)); // ~1 pulse/second
+      const lw = 4.5 + 1.5 * s;             // ~3..6 px
+      ctx.globalAlpha = 0.35 + 0.2 * s;     // ~0.15..0.55
       ctx.strokeStyle = COLORS.door;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lw;
       const d = game.door;
-      ctx.strokeRect(d.x + 3, d.y + 3, d.w - 6, d.h - 6);
+      ctx.beginPath();
+      doorArchPath(ctx, d.x, d.y, d.w, d.h, lw / 2); // follows the moving door
+      ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.lineWidth = 1;
     },
@@ -1329,9 +1347,9 @@ function drawRoom() {
         ctx.fillRect(tx * TILE, ty * TILE, TILE, TILE);
 }
 
-// The spike body is painted ONCE into a tiny sprite (gradient, edge line, tip
-// highlight) and blitted with drawImage everywhere — only halo and glint are
-// drawn live. Geometry is identical to the original triangles.
+// The spike's flat "steel blade with hot tip" look is painted ONCE into a
+// tiny sprite and blitted with drawImage everywhere. Only the rare gentle
+// glint is drawn live. Geometry is identical to the original triangles.
 let spikeSprite = null;
 function getSpikeSprite() {
   if (spikeSprite) return spikeSprite;
@@ -1339,44 +1357,43 @@ function getSpikeSprite() {
   const c = document.createElement('canvas');
   c.width = TILE; c.height = TILE;
   const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, TILE, 0, 10); // base (dark) -> tip (bright)
-  grad.addColorStop(0, S.base);
-  grad.addColorStop(1, S.tip);
-  g.fillStyle = grad;
-  g.beginPath(); // existing geometry: two teeth, tips at y+10, base at y+40
-  g.moveTo(0, TILE);  g.lineTo(10, 10); g.lineTo(20, TILE);
-  g.moveTo(20, TILE); g.lineTo(30, 10); g.lineTo(40, TILE);
-  g.fill();
-  // one lighter edge line per tooth (sharp metallic feel)
-  g.strokeStyle = S.edge;
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(0.5, TILE - 0.5); g.lineTo(10.5, 10.5);
-  g.moveTo(20.5, TILE - 0.5); g.lineTo(30.5, 10.5);
-  g.stroke();
-  // small bright highlights at the tips
-  g.fillStyle = S.tipHi;
-  g.fillRect(9, 10, 2, 2);
-  g.fillRect(29, 10, 2, 2);
+  // two teeth per tile, identical geometry as always: tips y+10, base y+40
+  for (const base of [0, 20]) {
+    const apex = base + 10, tipY = 10;
+    // hot tip: sub-triangle of the same tooth (same apex, same slopes)
+    const yTipBase = tipY + (TILE - tipY) * S.tipRatio; // steel/hot split line
+    const xl = apex + (base - apex) * S.tipRatio;       // left slope point at split
+    const xr = apex + (base + 20 - apex) * S.tipRatio;  // right slope point
+    // steel body, split flat into light left / dark right halves
+    g.fillStyle = S.steelLight;
+    g.beginPath();
+    g.moveTo(base, TILE); g.lineTo(apex, tipY); g.lineTo(apex, TILE); g.closePath();
+    g.fill();
+    g.fillStyle = S.steelDark;
+    g.beginPath();
+    g.moveTo(apex, tipY); g.lineTo(base + 20, TILE); g.lineTo(apex, TILE); g.closePath();
+    g.fill();
+    // hot tip halves
+    g.fillStyle = S.hotLight;
+    g.beginPath();
+    g.moveTo(apex, tipY); g.lineTo(xl, yTipBase); g.lineTo(apex, yTipBase); g.closePath();
+    g.fill();
+    g.fillStyle = S.hotDark;
+    g.beginPath();
+    g.moveTo(apex, tipY); g.lineTo(apex, yTipBase); g.lineTo(xr, yTipBase); g.closePath();
+    g.fill();
+  }
   spikeSprite = c;
   return c;
 }
 
-// live but cheap per-spike extras: soft breathing halo (larger, very faint,
-// no shadowBlur) and a gentle edge glint on a deterministic 4-8s cycle
+// the ONLY live per-spike effect: a rare gentle glint (~300 ms fade, each
+// tile on its own deterministic 4-8 s cycle, so spikes never sync up)
 function drawSpikeFx(g, tx, ty) {
-  const S = CONFIG.SPIKE, t = Game.stateTime;
+  const S = CONFIG.SPIKE;
+  if (!S.glint) return;
+  const t = Game.stateTime;
   const x = tx * TILE, y = ty * TILE;
-  const ph = bgNoise(tx * 13 + ty * 7, 4) * Math.PI * 2;
-  g.globalAlpha = Math.max(0, S.haloAlpha + S.haloPulse * Math.sin(t * S.haloRate + ph));
-  g.fillStyle = S.haloColor;
-  g.beginPath(); // slightly scaled copy of the teeth, welded to the base line
-  g.moveTo(x - 2,  y + TILE); g.lineTo(x + 10, y + 6); g.lineTo(x + 22, y + TILE);
-  g.moveTo(x + 18, y + TILE); g.lineTo(x + 30, y + 6); g.lineTo(x + 42, y + TILE);
-  g.fill();
-  g.globalAlpha = 1;
-  // glint: thin bright sliver fading in/out (~300 ms) along the first tooth's
-  // edge; every tile has its own deterministic offset so spikes never sync up
   const h = bgNoise(tx * 3 + ty * 11, 8);
   const cycle = Math.round(S.glintMin + h * (S.glintMax - S.glintMin));
   const local = (t + Math.floor(h * cycle)) % cycle;
@@ -1384,7 +1401,7 @@ function drawSpikeFx(g, tx, ty) {
     const k = local / S.glintFrames;            // 0..1
     const px = x + 2 + 8 * k, py = y + TILE - 6 - 20 * k; // drifts up the edge
     g.globalAlpha = Math.sin(Math.PI * k) * S.glintAlpha;
-    g.strokeStyle = S.tipHi;
+    g.strokeStyle = S.glintColor;
     g.lineWidth = 2;
     g.beginPath();
     g.moveTo(px - 2, py + 4);
@@ -1407,21 +1424,60 @@ function drawSpikes() {
   }
 }
 
+/* ---- exit door: static "portal" arch --------------------------------------
+   Painted once per door size into an offscreen sprite, then blitted at the
+   CURRENT game.door position every frame. Only paint — game.door (the win
+   hitbox) is never read or changed by any of this.                          */
+
+// ONE shared arch outline for the door sprite AND its moving pulse, so both
+// shapes always match. Draws an arch inside the rectangle (x, y, w, h): flat
+// bottom at y+h, straight sides, semicircle cap of the largest fitting
+// radius. `inset` (px per side) narrows the arch without changing its shape.
+function doorArchPath(g, x, y, w, h, inset) {
+  const ix = inset || 0;
+  const bx = x + ix, bw = Math.max(2, w - 2 * ix);
+  const r = Math.min(bw / 2, h);          // cap radius (largest that fits)
+  const shoulderY = y + h - r;            // side-to-cap junction line
+  const capR = Math.min(bw / 2, h - r);   // fits above the shoulder line
+  g.moveTo(bx, y + h);
+  g.lineTo(bx, shoulderY);
+  if (capR > 0.5) g.arc(bx + bw / 2, shoulderY, capR, Math.PI, 0, false);
+  g.lineTo(bx + bw, y + h);
+  g.closePath();
+}
+
+const doorSprites = new Map(); // one cached sprite per door size 'w x h'
+function getDoorSprite(w, h) {
+  const key = w + 'x' + h;
+  const spr = doorSprites.get(key);
+  if (spr) return spr;
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.ceil(w));
+  c.height = Math.max(2, Math.ceil(h));
+  const g = c.getContext('2d');
+  const D = CONFIG.DOOR;
+  const ix1 = Math.max(D.inset1 * w, D.minInset);   // opening inset, each side
+  const ix2 = ix1 + D.inset2 * w;                    // depth inset, each side
+  g.fillStyle = D.frame;
+  g.beginPath(); doorArchPath(g, 0, 0, w, h, 0); g.fill();
+  g.fillStyle = D.opening;
+  g.beginPath(); doorArchPath(g, 0, 0, w, h, ix1); g.fill();
+  g.fillStyle = D.depth;
+  g.beginPath(); doorArchPath(g, 0, 0, w, h, ix2); g.fill();
+  doorSprites.set(key, c);
+  return c;
+}
+
 function drawDoor() {
   const d = Game.door;
-  ctx.fillStyle = COLORS.door;
-  ctx.fillRect(d.x + 6, d.y + 6, d.w - 12, d.h - 6);   // sits on tile bottom
-  ctx.fillStyle = COLORS.bg;
-  ctx.beginPath();
-  ctx.arc(d.x + d.w - 13, d.y + 24, 2.5, 0, Math.PI * 2); // knob
-  ctx.fill();
+  ctx.drawImage(getDoorSprite(d.w, d.h), d.x, d.y);
 }
 
 /* The ONLY place the player's look is defined. Replace this one function when
    the character art changes — physics (28x28 hitbox) stays untouched.
    ALL drawing stays inside the 28x28 footprint; the body is feet-anchored.
-   opts (unused in-game today; reserved for ghosts / gravity-flip later):
-     { alpha, tintColor, eyesOff, flipY }                                   */
+   opts (reserved for later steps; in-game today only the win animation uses
+   scale/offset): { alpha, tintColor, eyesOff, flipY, scale, offsetX, offsetY } */
 
 let pvBlinkT = 180;         // frames until next blink
 let pvBlinkF = 0;           // frames left in current blink
@@ -1465,6 +1521,8 @@ function drawPlayer(g, p, opts) {
 
   // ---- squash & stretch (feet anchored, never beyond the 28x28 box) ----
   const W = p.w - 2 * V.inset, H = p.h - 2 * V.inset; // 26x26 base inside the box
+  const fxScale = (opts.scale === undefined) ? 1 : opts.scale;   // win anim: shrink into the door
+  const ox = Math.round(opts.offsetX || 0), oy = Math.round(opts.offsetY || 0);
   let sy = 1;
   if (pvLandT > 0) {
     const k = pvLandT / V.squashFrames;
@@ -1474,13 +1532,14 @@ function drawPlayer(g, p, opts) {
     else if (p.vy > 5) sy = 1 + V.stretchFallMax * Math.min(1, p.vy / 11);
   }
   const sx = Math.min(1 + (1 - sy) * 0.6, p.w / W);  // slight counter-scaling, capped
-  const dw = Math.round(W * sx), dh = H * sy;        // H*sy <= 28 by construction
-  const bx = Math.round(p.x) + Math.floor((p.w - dw) / 2);
-  const by = Math.round(p.y) + p.h - dh;             // feet stay on the hitbox floor
+  const dw = Math.max(1, Math.round(W * sx * fxScale));
+  const dh = Math.max(1, H * sy * fxScale);          // <= 28 normally (scale const waived <1)
+  const bx = Math.round(p.x) + ox + Math.floor((p.w - dw) / 2);
+  const by = Math.round(p.y) + oy + p.h - dh;        // feet stay on the hitbox floor
 
   g.save();
   if (opts.alpha !== undefined) g.globalAlpha = opts.alpha;
-  const flipY = (yy, hh) => (opts.flipY ? 2 * (p.y + p.h / 2) - yy - hh : yy); // ceiling-anchored when flipped
+  const flipY = (yy, hh) => (opts.flipY ? 2 * (Math.round(p.y) + oy + p.h / 2) - yy - hh : yy); // ceiling-anchored when flipped
 
   // ---- body: rounded rect, subtle vertical shading, thin top highlight ----
   g.beginPath();
@@ -1628,6 +1687,34 @@ function drawHUD() {
            fontStr(CONFIG.FONTS.hud), 'right');
 }
 
+// win animation (pure cosmetics): the player shrinks into the door opening
+// (ease-in), then one soft teal ring expands and fades. Fits inside the
+// existing COMPLETE_FRAMES transition; the hitbox and path are untouched.
+function drawWinFx() {
+  const D = CONFIG.DOOR;
+  const t = Game.stateTime - winFx.t0;   // complete-state clock (t0 = 0 by convention)
+  const doorCx = Game.door.x + Game.door.w / 2, doorCy = Game.door.y + Game.door.h / 2;
+  const cx0 = winFx.x0 + player.w / 2, cy0 = winFx.y0 + player.h / 2;
+  if (t < D.winShrinkFrames) {
+    const u = t / D.winShrinkFrames, e = u * u;          // ease-in
+    drawPlayer(ctx, player, {
+      scale: Math.max(0, 1 - e),
+      offsetX: (doorCx - cx0) * e,
+      offsetY: (doorCy - cy0) * e,
+    });
+  } else if (t < D.winShrinkFrames + D.winRingFrames) {
+    const u = (t - D.winShrinkFrames) / D.winRingFrames; // ring: 0..1
+    ctx.globalAlpha = Math.max(0, 0.8 * (1 - u));
+    ctx.strokeStyle = D.winRingColor;
+    ctx.lineWidth = Math.max(0.5, 2.5 - u);
+    ctx.beginPath();
+    ctx.arc(doorCx, doorCy, 4 + D.winRingMaxR * u, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+  }
+}
+
 function drawCompleteOverlay() {
   const a = Math.min(1, Game.stateTime / 15); // fade in
   ctx.fillStyle = COLORS.bg;
@@ -1678,11 +1765,14 @@ function render() {
     if (rule.onDraw) rule.onDraw(ctx, Game);  // rule world effects
   }
   drawParticles();
-  drawPlayer(ctx, player);
+  // during the win animation the real player stays put, but its DRAWING is
+  // replaced by the shrink-into-the-door phantom (see drawWinFx)
+  if (!(Game.state === 'complete' && winFx.started)) drawPlayer(ctx, player);
   if (Game.debug) drawDebug();
   drawHUD();
   if (Game.state === 'playing') drawNarrator(); // top-center band, never fades
   if (Game.state === 'complete') drawCompleteOverlay();
+  if (Game.state === 'complete' && winFx.started) drawWinFx(); // above the overlay
   drawFlash();
 }
 
@@ -1769,6 +1859,7 @@ function loadLevel(index) {
   renderStaticBG(def.act || 1);
   resetBGWall();
   Game.levelDeaths = 0;
+  winFx.started = false; // win FX belongs to the completed room only
   // clean slate for the new level: no state leaks between rooms
   Game.hazards = new Map();
   // cached spike cells for the player's darting danger-eyes (purely visual)
@@ -1829,9 +1920,19 @@ function onPlayerDeath() {
   restartAttempt(true);
 }
 
+// win animation state (VISUAL ONLY — never read by physics or win detection;
+// when CONFIG.DOOR.winAnim is false it never activates and the game behaves
+// exactly as before)
+let winFx = { started: false, t0: 0, x0: 0, y0: 0 };
+
 function onPlayerWin() {
-  // save THIS attempt's path before the next level loads
+  // save THIS attempt's path before the next level loads — BEFORE any win FX
+  // state, so recording is independent of visuals (order unchanged)
   Game.run.lastWinPath = Game.run.currentPath.slice();
+  if (CONFIG.DOOR.winAnim)              // visual-only win effect (default on)
+    winFx = { started: true, t0: 0, x0: player.x, y0: player.y };
+  // note: t0 is 0 because setState('complete') above resets stateTime to 0;
+  // the FX runs on the complete-state clock, not the playing-state clock
   for (const rule of Game.activeRules) {
     if (rule.onWin) rule.onWin(Game);
   }
