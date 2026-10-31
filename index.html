@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fa">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Same Room</title>
+<title></title>
 <style>
   /* Letterboxed, centered canvas. The JS sizes the canvas to fit the window
      while keeping the 16:9 aspect ratio. */
@@ -45,13 +45,37 @@
 /* ============================== CONFIG =================================== */
 
 const CONFIG = {
+  LANG: 'fa', // active language; Farsi is the default
+  SAVE_KEY: 'sameRoom.save.v1',
+  UNLOCK_ALL: false, // progression is controlled by saved highest room
   TILE: 40,
   COLS: 32,
   ROWS: 18,
   VIEW_W: 32 * 40,   // 1280 logical canvas width
   VIEW_H: 18 * 40,   // 720  logical canvas height
 
-  TOTAL_LEVELS: 30,  // the game concept is 30 rooms; 6 exist so far
+  TOTAL_LEVELS: 30,  // the game concept is 30 rooms; 18 exist so far
+
+  MENU: {
+    bgAct: 1,
+    titleY: 215, titleSize: 64,
+    itemStartY: 320, itemGap: 84, itemW: 520, itemH: 64,
+    levelsTitleY: 190, levelsStartY: 230, cellSize: 72, cellGap: 12,
+    levelsCols: 6, levelsRows: 5, levelsBackY: 680,
+    optionsHeaderY: 248, optionsStartY: 340, optionsGap: 84, optionsBackY: 590,
+    quitQuestionY: 270, quitStartY: 405, quitGap: 88, quitItemW: 260, quitItemH: 64,
+    farewellHintY: 684,
+    tally: { x: 60, y: 190, w: 240, h: 290, captionY: 475,
+            groupsPerRow: 4, groupGap: 46, rowGap: 50, strokeGap: 7,
+            strokeLen: 26, strokeW: 2, max: 80, color: '#ff4d5e', alpha: 0.18 },
+    colors: {
+      selectedFill: '#2b2f45', selectedOutline: '#4cc9a7',
+      selectedText: '#f2f2f2', normalText: '#cfd3e6',
+      selectedCellFill: '#41465d', lockedFill: '#1b1d2b',
+      lockedSelectedFill: '#25283a', cellText: '#cfd3e6',
+      check: '#4cc9a7', death: '#ff4d5e',
+    },
+  },
 
   STEP_MS: 1000 / 60, // fixed timestep: 60 updates per second
   MAX_STEPS: 5,       // cap physics steps per frame (anti death-spiral)
@@ -136,24 +160,52 @@ const CONFIG = {
     },
   },
 
-  // Typography: ONE clean sans stack (system fonts only — no webfonts,
-  // no serif, italic or calligraphic styles anywhere).
+  // Typography: system fonts only; no webfonts or external font files.
   FONTS: {
-    family:     '"Segoe UI", "Inter", "Roboto", "Helvetica Neue", Arial, Tahoma, sans-serif',
-    narrator:   { size: 28, weight: 700 },  // top-center band; auto-shrinks, see UI.narrator
-    hud:        { size: 16, weight: 600 },  // room counter / death counter
-    overlay:    { size: 42, weight: 700 },  // "ROOM COMPLETE" title
-    overlaySub: { size: 17, weight: 600 },  // "ROOM COMPLETE" subtitle
-    endTitle:   { size: 46, weight: 700 },  // "To be continued..." title
-    endLine:    { size: 17, weight: 600 },  // end screen body lines
-    debug:      { size: 13, weight: 600 },  // F2 overlay corner info
+    en: {
+      family: '"Segoe UI", "Inter", "Roboto", "Helvetica Neue", Arial, Tahoma, sans-serif',
+      narrator:   { size: 28, weight: 700, minSize: 20 },
+      hud:        { size: 16, weight: 600 },
+      overlay:    { size: 42, weight: 700 },
+      overlaySub: { size: 17, weight: 600 },
+      endTitle:   { size: 46, weight: 700 },
+      endLine:    { size: 17, weight: 600 },
+      debug:      { size: 13, weight: 600 },
+      menuTitle:  { size: 64, weight: 700 },
+      menuItem:   { size: 30, weight: 600 },
+      menuSubtitle:{ size: 18, weight: 600 },
+      menuSection:{ size: 32, weight: 700 },
+      menuCell:   { size: 28, weight: 600 },
+      menuSmall:  { size: 14, weight: 600 },
+      menuConfirm:{ size: 48, weight: 700 },
+      menuHint:   { size: 16, weight: 600 },
+    },
+    fa: {
+      family: '"Vazirmatn", "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif',
+      narrator:   { size: 30, weight: 700, minSize: 22 },
+      hud:        { size: 18, weight: 600 },
+      overlay:    { size: 42, weight: 700 },
+      overlaySub: { size: 17, weight: 600 },
+      endTitle:   { size: 46, weight: 700 },
+      endLine:    { size: 17, weight: 600 },
+      debug:      { size: 13, weight: 600 },
+      menuTitle:  { size: 64, weight: 700 },
+      menuItem:   { size: 30, weight: 600 },
+      menuSubtitle:{ size: 18, weight: 600 },
+      menuSection:{ size: 32, weight: 700 },
+      menuCell:   { size: 28, weight: 600 },
+      menuSmall:  { size: 14, weight: 600 },
+      menuConfirm:{ size: 48, weight: 700 },
+      menuHint:   { size: 16, weight: 600 },
+    },
   },
 
   // UI layout — every text position on screen lives here.
   // Layout note: rows 1-3, x 320-960 are reserved for the narrator;
   // no level content may be placed there.
   UI: {
-    direction: 'ltr', // canvas text direction ('rtl' reserved for future Persian mode)
+    direction: null, // set by setLanguage() from CONFIG.LANG
+    mirrorHudInRtl: true,
     hudRoom:   { x: 24,   y: 36 },
     hudDeaths: { x: 1256, y: 36 },  // = VIEW_W - 24
     narrator: {
@@ -161,11 +213,10 @@ const CONFIG = {
       maxTextW: 600,          // shrink-to-fit budget
       maxPillW: 640,          // the pill can never leave x 320..960
       padX: 16, padY: 8,
-      minSize: 20,            // narrator never shrinks below this
       lineHeight: 1.25,       // relative to font size (two-line mode)
       pillColor: '#14161f', pillAlpha: 0.7, pillRadius: 14,
     },
-    debugInfo: { x: 16, yAct3: 602, yGhost: 626, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 118 / -94 / -70 / -46 / -28
+    debugInfo: { x: 16, yProgress: 578, yAct3: 602, yGhost: 626, yState: 650, yRules: 674, yDeaths: 698 }, // VIEW_H - 118 / -94 / -70 / -46 / -28
     complete:  { x: 640, titleYOff: -8,  subYOff: 30 },   // offsets from VIEW_H/2
     end:       { x: 640, titleYOff: -40, subYOff: 0, deathsYOff: 54, restartYOff: 100 },
   },
@@ -235,6 +286,19 @@ const CONFIG = {
     winRingColor: '#4cc9a7', winRingMaxR: 26,
   },
 
+  // Runtime-synthesized Web Audio (no external or embedded audio assets).
+  AUDIO: {
+    enabled: true, master: 0.8, sfx: 0.7, ambient: 0.16, ui: 0.5,
+    reverbWet: 0.12, maxVoices: 28,
+    footsteps: true, tallyScratch: true, ghostHum: true,
+    panning: true, ducking: true,
+    acts: {
+      1: { root: 55, fifth: 82.4, wobbleCents: 0, airLevel: 0 },
+      2: { root: 55, fifth: 82.4, wobbleCents: 18, airLevel: 0 },
+      3: { root: 49, fifth: 73.4, wobbleCents: 0, airLevel: 0.018 },
+    },
+  },
+
   DEATH_FREEZE_FRAMES: 8,  // brief hitstop after dying (~130 ms)
   FLASH_FRAMES: 10,        // red screen flash after dying
   COMPLETE_FRAMES: 90,     // length of the "level complete" transition
@@ -261,104 +325,1324 @@ let COLORS = CONFIG.THEMES[1];
 
 /* All user-visible text in one place — edit wording right here.            */
 const STRINGS = {
-  hud: {
-    room:   (index, total) => 'Room ' + index + ' / ' + total,
-    deaths: (n) => 'Deaths: ' + n,
-  },
-  transitions: {
-    completeTitle: 'ROOM COMPLETE',
-    completeSub:   'The room makes a note of that.',
-  },
-  end: {
-    title:   'To be continued...',
-    sub:     'The room is thinking about what to do to you next.',
-    deaths:  (n) => 'Deaths this run: ' + n,
-    restart: 'Press R to play again',
-  },
-  // narrator lines keyed by level number; `events` holds swap-in lines that
-  // rules request via the level's narratorEvents map (e.g. onButton)
-  levels: {
-    1: {
-      narrator: 'Ah, a guest. The exit is up there. The spikes are decorative. Probably.',
+  en: {
+    title: 'Same Room',
+    hud: {
+      room:   (index, total) => 'Room ' + index + ' / ' + total,
+      deaths: (n) => 'Deaths: ' + n,
     },
-    2: {
-      narrator: 'Same room. Funny. Try not to walk where you walked.',
+    transitions: {
+      completeTitle: 'ROOM COMPLETE',
+      completeSub:   'The room makes a note of that.',
     },
-    3: {
-      narrator: 'Whatever you do, do NOT touch the button.',
-      events: {
-        onButton: '...I said do not. But sure, go ahead.',
+    end: {
+      title:   'To be continued...',
+      sub:     'The room is thinking about what to do to you next.',
+      deaths:  (n) => 'Deaths this run: ' + n,
+      restart: 'Press R to play again',
+    },
+    menu: {
+      title: 'Same Room',
+      continue: 'Continue', start: 'Start', levels: 'Levels', options: 'Options',
+      language: 'Language', back: 'Back', quit: 'Quit', really: 'Really?',
+      yes: 'Yes', no: 'No',
+      languageEnglish: 'English', languagePersian: 'فارسی',
+      continueSub: (n, m) => 'Room ' + n + ' · Deaths ' + m,
+      totalDeaths: (n) => 'Total deaths: ' + n,
+      farewellHint: 'Click or press any key',
+      nContinue: "You're back.", nStart: 'Make yourself at home.',
+      nLevels: "Look where you've died.", nOptions: 'Preferences? You?',
+      nLanguage: 'Pick one. I speak both.', nQuit: 'Leaving already?',
+      nReally: 'Really?', nYes: 'Fine. Go.', nNo: 'Good choice.',
+      nLocked: 'Not yet.', nFarewell: "Go on, then. I'll be here.",
+      nDepends: 'Go first. I need your footprints.',
+      sound: 'Sound', on: 'On', off: 'Off',
+      nSound: 'Want me to be quiet?',
+      nSoundOff: 'Silence. My favorite.',
+      nSoundOn: 'Ah, noise. Welcome back.',
+    },
+    // Narrator lines keyed by level number; events are selected via narratorEvents.
+    levels: {
+      1: { narrator: 'Ah, a guest. The exit is up there. The spikes are decorative. Probably.' },
+      2: { narrator: 'Same room. Funny. Try not to walk where you walked.' },
+      3: {
+        narrator: 'Whatever you do, do NOT touch the button.',
+        events: { onButton: '...I said do not. But sure, go ahead.' },
       },
+      4: { narrator: "The door is shy. It doesn't like being chased." },
+      5: { narrator: "I'm adding a little something where you died." },
+      6: { narrator: 'The room is rotating. Slightly. Please keep jumping.' },
+      7: { narrator: "Left is right. Right is left. Don't look at me." },
+      8: { narrator: 'Jumping flips gravity. Up is down. Keep up.' },
+      9: { narrator: 'Every jump swaps left and right. Surprise.' },
+      10: { narrator: 'Your inputs arrive late. Plan ahead.' },
+      11: { narrator: 'No walking the same direction twice in a row.' },
+      12: { narrator: 'Easy one. The nearer the door, the faster the room.' },
+      13: { narrator: 'Stand on the button. Press R. Let your past self do the standing.' },
+      14: { narrator: 'Two buttons. Two past selves. Do the math.' },
+      15: { narrator: 'Your old route is chasing you. Try not to meet it.' },
+      16: { narrator: 'Your past self is playing in reverse. Be patient with it.' },
+      17: { narrator: 'Every death leaves something behind. Use it.' },
+      18: { narrator: 'A ghost guards the door. Be rude.' },
     },
-    4: {
-      narrator: "The door is shy. It doesn't like being chased.",
-    },
-    5: {
-      narrator: "I'm adding a little something where you died.",
-    },
-    6: {
-      narrator: 'The room is rotating. Slightly. Please keep jumping.',
-    },
-    7: {
-      narrator: "Left is right. Right is left. Don't look at me.",
-    },
-    8: {
-      narrator: 'Jumping flips gravity. Up is down. Keep up.',
-    },
-    9: {
-      narrator: 'Every jump swaps left and right. Surprise.',
-    },
-    10: {
-      narrator: 'Your inputs arrive late. Plan ahead.',
-    },
-    11: {
-      narrator: 'No walking the same direction twice in a row.',
-    },
-    12: {
-      narrator: 'Easy one. The nearer the door, the faster the room.',
-    },
-    13: {
-      narrator: 'Stand on the button. Press R. Let your past self do the standing.',
-    },
-    14: {
-      narrator: 'Two buttons. Two past selves. Do the math.',
-    },
-    15: {
-      narrator: 'Your old route is chasing you. Try not to meet it.',
-    },
-    16: {
-      narrator: 'Your past self is playing in reverse. Be patient with it.',
-    },
-    17: {
-      narrator: 'Every death leaves something behind. Use it.',
-    },
-    18: {
-      narrator: 'A ghost guards the door. Be rude.',
+    // Debug overlay deliberately remains English/Latin in both languages.
+    debug: {
+      rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
+      progress: (mode, highest, current, total) =>
+        'mode: ' + mode + ' · highest: ' + highest +
+        ' · current: ' + current + ' · saved deaths: ' + total,
+      ghostState: (af, count, lens, ghostsTxt) =>
+        'attemptFrame: ' + af + ' · past attempts: ' + count +
+        (lens ? ' [' + lens + ']' : '') + ' · ghosts: ' + ghostsTxt,
+      ghostEntry: (i, on, x, y) =>
+        '#' + i + ' ' + (on ? 'on (' + x + ',' + y + ')' : 'off'),
+      ghostsNone: '(none)',
+      act3State: (dp, sc, gm) =>
+        'dead platforms: ' + dp + ' · scripted ghost: ' + sc +
+        ' · gate mode: ' + gm,
+      ghostAlive: 'alive', ghostKilled: 'killed', fieldNone: '-',
+      gateModeNormal: 'normal',
+      deaths:    (n)   => 'deaths: ' + n,
+      ruleState: (g, s, m, ts, d) =>
+        'gravityDir: ' + g + ' · keysSwapped: ' + s +
+        ' · lastMoveDir: ' + (m === null ? 'null' : m) +
+        ' · timeScale: ' + ts.toFixed(2) +
+        ' · inputDelay: ' + (d ? 'on' : 'off'),
     },
   },
-  debug: {
-    rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
-    // Act 3 diagnostics: attempt frame, stored attempts, live ghosts
-    ghostState: (af, count, lens, ghostsTxt) =>
-      'attemptFrame: ' + af + ' \u00b7 past attempts: ' + count +
-      (lens ? ' [' + lens + ']' : '') + ' \u00b7 ghosts: ' + ghostsTxt,
-    ghostEntry: (i, on, x, y) =>
-      '#' + i + ' ' + (on ? 'on (' + x + ',' + y + ')' : 'off'),
-    ghostsNone: '(none)',
-    // STEP 5B: deathPlatforms count, scripted-ghost state, heldGate mode
-    act3State: (dp, sc, gm) =>
-      'dead platforms: ' + dp + ' \u00b7 scripted ghost: ' + sc +
-      ' \u00b7 gate mode: ' + gm,
-    ghostAlive: 'alive', ghostKilled: 'killed', fieldNone: '-',
-    gateModeNormal: 'normal',
-    deaths:    (n)   => 'deaths: ' + n,
-    ruleState: (g, s, m, ts, d) =>
-      'gravityDir: ' + g + ' · keysSwapped: ' + s +
-      ' · lastMoveDir: ' + (m === null ? 'null' : m) +
-      ' · timeScale: ' + ts.toFixed(2) +
-      ' · inputDelay: ' + (d ? 'on' : 'off'),
+  fa: {
+    title: 'همان اتاق',
+    hud: {
+      room:   (index, total) => 'اتاق ' + localizeDigits(index) + ' از ' + localizeDigits(total),
+      deaths: (n) => 'مرگ: ' + localizeDigits(n),
+    },
+    transitions: {
+      completeTitle: 'اتاق تموم شد',
+      completeSub:   'اتاق اینم یادداشت کرد.',
+    },
+    end: {
+      title:   'ادامه دارد…',
+      sub:     'اتاق داره فکر می‌کنه دفعه‌ی بعد چطور اذیتت کنه.',
+      deaths:  (n) => 'مرگ‌های این دور: ' + localizeDigits(n),
+      restart: 'برای بازی دوباره، کلید شروع رو بزن.',
+    },
+    menu: {
+      title: 'همان اتاق',
+      continue: 'ادامه', start: 'شروع', levels: 'مرحله‌ها', options: 'تنظیمات',
+      language: 'زبان', back: 'بازگشت', quit: 'خروج', really: 'مطمئنی؟',
+      yes: 'بله', no: 'نه',
+      languageEnglish: 'English', languagePersian: 'فارسی',
+      continueSub: (n, m) => 'اتاق ' + localizeDigits(n) + ' · مرگ ' + localizeDigits(m),
+      totalDeaths: (n) => 'کل مرگ‌ها: ' + localizeDigits(n),
+      farewellHint: 'برای برگشت، کلیک کن یا کلیدی بزن',
+      nContinue: 'برگشتی.', nStart: 'راحت باش.',
+      nLevels: 'ببین کجاها جون دادی.', nOptions: 'سلیقه هم داری؟',
+      nLanguage: 'هرکدوم. من هردو رو بلدم.', nQuit: 'همین الان؟',
+      nReally: 'جدی؟', nYes: 'باشه. برو.', nNo: 'آفرین.',
+      nLocked: 'هنوز نه.', nFarewell: 'برو. منم همین‌جام.',
+      nDepends: 'اول تو برو. جای پاهات رو می‌خوام.',
+      sound: 'صدا', on: 'روشن', off: 'خاموش',
+      nSound: 'می‌خوای ساکت باشم؟',
+      nSoundOff: 'سکوت. بهترینشه.',
+      nSoundOn: 'آهان، سروصدا. خوش اومدی.',
+    },
+    levels: {
+      1: { narrator: 'فقط تا در برو. فعلاً.' },
+      2: { narrator: 'همون اتاقه. هیچ‌وقت یه مسیر رو دو بار نرو!' },
+      3: {
+        narrator: 'روی دکمه نرو!',
+        events: { onButton: 'بهت گفتم روی دکمه نرو… ولی خب، بفرما.' },
+      },
+      4: { narrator: 'در خجالتیه. دنبالش نکن.' },
+      5: { narrator: 'هرجا جون دادی، یه هدیه می‌ذارم.' },
+      6: { narrator: 'اتاق یه کم می‌چرخه. فقط بپر.' },
+      7: { narrator: 'چپ راسته، راست چپه. تقصیر من نیست…' },
+      8: { narrator: 'بپری، بالا پایین می‌شه. دووم بیار.' },
+      9: { narrator: 'هر بار که بپری، چپ راست می‌شه. سوپرایز!' },
+      10: { narrator: 'دستورهات دیر می‌رسن. زودتر فکر کن.' },
+      11: { narrator: 'دو بار پشت‌هم یه سمت؟ نخیر.' },
+      12: { narrator: 'آسونه. هرچی به در نزدیک‌تر، تندتر.' },
+      13: { narrator: 'گاهی از خود قبلیت کمک بگیر، با R!' },
+      14: { narrator: 'خود قبلیت، یه خود قبلی هم داره دیگه…' },
+      15: { narrator: 'مسیر قبلیت دنبالته. بهش نرس.' },
+      16: { narrator: 'خود قبلیت برعکس اجرا می‌شه. صبور باش!' },
+      17: { narrator: 'هر جون دادنی، هدیه‌ای هم داره.' },
+      18: { narrator: 'شبح نگهبانه. باهاش بی‌ادب باش.' },
+    },
+    // Debug overlay deliberately remains English/Latin in both languages.
+    debug: {
+      rules:     (ids) => 'rules: ' + (ids.length ? ids.join(', ') : '(none)'),
+      progress: (mode, highest, current, total) =>
+        'mode: ' + mode + ' · highest: ' + highest +
+        ' · current: ' + current + ' · saved deaths: ' + total,
+      ghostState: (af, count, lens, ghostsTxt) =>
+        'attemptFrame: ' + af + ' · past attempts: ' + count +
+        (lens ? ' [' + lens + ']' : '') + ' · ghosts: ' + ghostsTxt,
+      ghostEntry: (i, on, x, y) =>
+        '#' + i + ' ' + (on ? 'on (' + x + ',' + y + ')' : 'off'),
+      ghostsNone: '(none)',
+      act3State: (dp, sc, gm) =>
+        'dead platforms: ' + dp + ' · scripted ghost: ' + sc +
+        ' · gate mode: ' + gm,
+      ghostAlive: 'alive', ghostKilled: 'killed', fieldNone: '-',
+      gateModeNormal: 'normal',
+      deaths:    (n)   => 'deaths: ' + n,
+      ruleState: (g, s, m, ts, d) =>
+        'gravityDir: ' + g + ' · keysSwapped: ' + s +
+        ' · lastMoveDir: ' + (m === null ? 'null' : m) +
+        ' · timeScale: ' + ts.toFixed(2) +
+        ' · inputDelay: ' + (d ? 'on' : 'off'),
+    },
   },
 };
+
+function S() {
+  return STRINGS[CONFIG.LANG] || STRINGS.en;
+}
+
+function localizeDigits(value) {
+  const persian = '۰۱۲۳۴۵۶۷۸۹';
+  return String(value).replace(/[0-9]/g, d => persian.charAt(d.charCodeAt(0) - 48));
+}
+
+function playerNumber(value) {
+  return CONFIG.LANG === 'fa' ? localizeDigits(value) : String(value);
+}
+
+/* ============================== AUDIO =====================================
+   All sound is synthesized at runtime. AudioContext and its buffers are made
+   only after the first pointer/key gesture; any failure degrades to silence.
+   ========================================================================== */
+
+let audioRandomState = ((Date.now() ^ Math.floor(performance.now() * 1000) ^ 0x9e3779b9) >>> 0) || 0x6d2b79f5;
+function audioRandomUnit() {
+  audioRandomState = (Math.imul(audioRandomState, 1664525) + 1013904223) >>> 0;
+  return audioRandomState / 4294967296;
+}
+
+function audioClamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function audioPanForX(x) {
+  return audioClamp(((Number(x) - VIEW_W / 2) / (VIEW_W / 2)) * 0.4, -0.4, 0.4);
+}
+
+function audioParamValue(param, value, time) {
+  try {
+    if (param && param.setValueAtTime) param.setValueAtTime(value, time);
+    else if (param) param.value = value;
+  } catch (e) {}
+}
+
+function audioParamRamp(param, method, value, time) {
+  try {
+    if (param && typeof param[method] === 'function') param[method](value, time);
+    else if (param) param.value = value;
+  } catch (e) {}
+}
+
+function audioTrackNode(voice, node, isSource) {
+  if (!voice || !node) return node;
+  voice.nodes.push(node);
+  if (isSource) {
+    voice.sourceCount++;
+    node.onended = () => {
+      if (voice.cleaned) return;
+      voice.endedCount++;
+      try { node.disconnect(); } catch (e) {}
+      if (voice.endedCount >= voice.sourceCount) voice.cleanup();
+    };
+  }
+  return node;
+}
+
+function audioSetEnvelope(param, t, duration, peak, attack, release) {
+  const floor = 0.0001;
+  const a = Math.max(0.001, Math.min(attack || 0.003, duration * 0.45));
+  const r = Math.max(0.004, Math.min(release || duration * 0.55, duration - a));
+  audioParamValue(param, floor, t);
+  audioParamRamp(param, 'linearRampToValueAtTime', Math.max(floor, peak), t + a);
+  const releaseAt = Math.max(t + a, t + duration - r);
+  audioParamValue(param, Math.max(floor, peak), releaseAt);
+  audioParamRamp(param, 'exponentialRampToValueAtTime', floor, t + duration);
+}
+
+function audioAddTone(ctx, t, out, opts, spec) {
+  const voice = opts._voice;
+  const duration = Math.max(0.006, spec.duration || 0.05);
+  const rate = Number.isFinite(opts.rate) ? opts.rate : 1;
+  const osc = audioTrackNode(voice, ctx.createOscillator(), true);
+  osc.type = spec.type || 'sine';
+  const startHz = Math.max(1, (spec.startHz || spec.frequency || 440) * rate);
+  const endHz = Math.max(1, (spec.endHz === undefined ? startHz : spec.endHz) * rate);
+  audioParamValue(osc.frequency, startHz, t);
+  if (Math.abs(endHz - startHz) > 0.01)
+    audioParamRamp(osc.frequency, 'exponentialRampToValueAtTime', endHz, t + duration);
+
+  let chain = osc;
+  if (spec.filter) {
+    const filter = audioTrackNode(voice, ctx.createBiquadFilter(), false);
+    filter.type = spec.filter.type || 'lowpass';
+    if (spec.filter.Q !== undefined) audioParamValue(filter.Q, spec.filter.Q, t);
+    const f0 = Math.max(20, spec.filter.startHz || spec.filter.frequency || 1000);
+    const f1 = Math.max(20, spec.filter.endHz === undefined ? f0 : spec.filter.endHz);
+    audioParamValue(filter.frequency, f0, t);
+    if (Math.abs(f1 - f0) > 0.1)
+      audioParamRamp(filter.frequency, 'exponentialRampToValueAtTime', f1, t + duration);
+    chain.connect(filter);
+    chain = filter;
+  }
+
+  const amp = audioTrackNode(voice, ctx.createGain(), false);
+  audioSetEnvelope(amp.gain, t, duration, spec.peak === undefined ? 0.1 : spec.peak,
+    spec.attack === undefined ? Math.min(0.004, duration * 0.2) : spec.attack,
+    spec.release === undefined ? duration * 0.55 : spec.release);
+  chain.connect(amp);
+  amp.connect(out);
+  if (spec.tremolo) audioAddTremolo(ctx, t, amp.gain, opts, spec.tremolo, duration);
+  osc.start(t);
+  osc.stop(t + duration + 0.012);
+  return { osc, amp };
+}
+
+function audioAddNoise(ctx, t, out, opts, spec) {
+  const voice = opts._voice, buffer = opts._noiseBuffer;
+  if (!buffer) return null;
+  const duration = Math.max(0.006, spec.duration || 0.04);
+  const src = audioTrackNode(voice, ctx.createBufferSource(), true);
+  src.buffer = buffer;
+  src.loop = true;
+  let chain = src;
+  if (spec.filter) {
+    const filter = audioTrackNode(voice, ctx.createBiquadFilter(), false);
+    filter.type = spec.filter.type || 'lowpass';
+    if (spec.filter.Q !== undefined) audioParamValue(filter.Q, spec.filter.Q, t);
+    const f0 = Math.max(20, spec.filter.startHz || spec.filter.frequency || 1000);
+    const f1 = Math.max(20, spec.filter.endHz === undefined ? f0 : spec.filter.endHz);
+    audioParamValue(filter.frequency, f0, t);
+    if (Math.abs(f1 - f0) > 0.1)
+      audioParamRamp(filter.frequency, 'exponentialRampToValueAtTime', f1, t + duration);
+    chain.connect(filter);
+    chain = filter;
+  }
+  const amp = audioTrackNode(voice, ctx.createGain(), false);
+  audioSetEnvelope(amp.gain, t, duration, spec.peak === undefined ? 0.05 : spec.peak,
+    spec.attack === undefined ? Math.min(0.003, duration * 0.2) : spec.attack,
+    spec.release === undefined ? duration * 0.65 : spec.release);
+  if (spec.crackle) {
+    const steps = 14;
+    for (let i = 0; i < steps; i++) {
+      const at = t + duration * i / steps;
+      audioParamValue(amp.gain, Math.max(0.0001, spec.peak * (0.25 + audioRandomUnit() * 0.75)), at);
+    }
+    audioParamRamp(amp.gain, 'exponentialRampToValueAtTime', 0.0001, t + duration);
+  }
+  chain.connect(amp);
+  amp.connect(out);
+  const maxOffset = Math.max(0, (buffer.duration || 2) - 0.01);
+  const offset = audioRandomUnit() * maxOffset;
+  src.start(t, offset);
+  src.stop(t + duration + 0.012);
+  return { src, amp };
+}
+
+function audioAddTremolo(ctx, t, parameter, opts, spec, duration) {
+  const voice = opts._voice;
+  const lfo = audioTrackNode(voice, ctx.createOscillator(), true);
+  const depth = audioTrackNode(voice, ctx.createGain(), false);
+  lfo.type = 'sine';
+  audioParamValue(lfo.frequency, spec.frequency || 6, t);
+  audioParamValue(depth.gain, spec.depth === undefined ? 0.2 : spec.depth, t);
+  lfo.connect(depth);
+  depth.connect(parameter);
+  lfo.start(t);
+  lfo.stop(t + duration + 0.012);
+}
+
+function audioRandom(min, max) {
+  return min + audioRandomUnit() * (max - min);
+}
+
+function audioDeathSpike(ctx, t, out, opts, metallic) {
+  const r = audioRandom(0.97, 1.03);
+  if (metallic) {
+    audioAddTone(ctx, t, out, { ...opts, rate: r },
+      { type: 'sine', frequency: 1800, duration: 0.14, peak: 0.16, attack: 0.002, release: 0.12 });
+    audioAddTone(ctx, t, out, { ...opts, rate: r },
+      { type: 'sine', frequency: 2750, duration: 0.14, peak: 0.12, attack: 0.002, release: 0.12 });
+  }
+  audioAddTone(ctx, t, out, opts,
+    { type: 'sine', startHz: 260, endHz: 55, duration: 0.16, peak: 0.45, attack: 0.003, release: 0.14 });
+  audioAddNoise(ctx, t, out, opts,
+    { duration: 0.18, peak: 0.28, attack: 0.003, release: 0.16,
+      filter: { type: 'bandpass', startHz: 1200, endHz: 300, Q: 0.8 } });
+  for (let i = 0; i < 7; i++) {
+    audioAddTone(ctx, t + audioRandom(0.04, 0.26), out, opts,
+      { type: 'sine', frequency: audioRandom(900, 2400), duration: 0.012,
+        peak: 0.06, attack: 0.001, release: 0.01 });
+  }
+}
+
+const SOUNDS = {
+  jump(ctx, t, out, opts) {
+    const rate = opts.rate || audioRandom(0.96, 1.04);
+    audioAddTone(ctx, t, out, { ...opts, rate },
+      { type: 'triangle', startHz: 300, endHz: 560, duration: 0.11,
+        peak: 0.45, attack: 0.003, release: 0.10 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.025, peak: 0.06, attack: 0.001, release: 0.022,
+        filter: { type: 'highpass', frequency: 2600, Q: 0.7 } });
+  },
+  flip(ctx, t, out, opts) {
+    const up = opts.gravityUp !== false;
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.22, peak: 0.28, attack: 0.01, release: 0.20,
+        filter: { type: 'bandpass', startHz: up ? 400 : 2400,
+          endHz: up ? 2400 : 400, Q: 1.0 } });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 110, endHz: 70, duration: 0.10,
+        peak: 0.12, attack: 0.003, release: 0.09 });
+  },
+  land(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 150, endHz: 60, duration: 0.09,
+        peak: 0.35, attack: 0.003, release: 0.08 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.06, peak: 0.11, attack: 0.002, release: 0.055,
+        filter: { type: 'lowpass', frequency: 700, Q: 0.7 } });
+  },
+  step(ctx, t, out, opts) {
+    const rate = opts.rate || audioRandom(0.85, 1.15);
+    audioAddNoise(ctx, t, out, { ...opts, rate },
+      { duration: 0.02, peak: 0.05, attack: 0.001, release: 0.019,
+        filter: { type: 'bandpass', frequency: 1800 * rate, Q: 1.2 } });
+  },
+  death_spike(ctx, t, out, opts) { audioDeathSpike(ctx, t, out, opts, true); },
+  death(ctx, t, out, opts) { audioDeathSpike(ctx, t, out, opts, false); },
+  death_lava(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.26, peak: 0.22, attack: 0.004, release: 0.24, crackle: true,
+        filter: { type: 'highpass', frequency: 3000, Q: 0.7 } });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 120, endHz: 50, duration: 0.18,
+        peak: 0.35, attack: 0.003, release: 0.17 });
+  },
+  death_ghost(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.30, peak: 0.22, attack: 0.06, release: 0.23,
+        filter: { type: 'lowpass', frequency: 400, Q: 0.8 } });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 110, endHz: 70, duration: 0.30,
+        peak: 0.40, attack: 0.015, release: 0.27 });
+  },
+  tally_scratch(ctx, t, out, opts) {
+    for (let i = 0; i < 3; i++) audioAddNoise(ctx, t + i * 0.036, out, opts,
+      { duration: 0.032, peak: 0.05, attack: 0.003, release: 0.029,
+        filter: { type: 'bandpass', startHz: 2500, endHz: 1200, Q: 1.2 } });
+  },
+  spike_pop(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.07, peak: 0.14, attack: 0.002, release: 0.065,
+        filter: { type: 'bandpass', startHz: 800, endHz: 3000, Q: 0.9 } });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', frequency: 2200, duration: 0.06, peak: 0.20,
+        attack: 0.002, release: 0.055 });
+  },
+  portal(ctx, t, out, opts) {
+    const d = audioClamp(opts.duration || 0.45, 0.08, 0.5);
+    const rate = opts.rate || 1;
+    const main = audioAddTone(ctx, t, out, { ...opts, rate },
+      { type: 'sine', startHz: 180, endHz: 1100, duration: d,
+        peak: 0.30, attack: 0.025, release: 0.13,
+        filter: { type: 'lowpass', startHz: 400, endHz: 5000, Q: 0.7 },
+        tremolo: { frequency: 14, depth: 0.3 } });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: d * 0.72, peak: 0.15, attack: 0.04, release: d * 0.55,
+        filter: { type: 'bandpass', startHz: 500, endHz: 2600, Q: 0.7 } });
+    audioAddTone(ctx, t + d * 0.70, out, opts,
+      { type: 'sine', frequency: 1319, duration: Math.min(0.06, d * 0.14),
+        peak: 0.12, attack: 0.002, release: 0.055 });
+    audioAddTone(ctx, t + d * 0.85, out, opts,
+      { type: 'sine', frequency: 1976, duration: Math.min(0.06, d * 0.12),
+        peak: 0.10, attack: 0.002, release: 0.055 });
+    void main;
+  },
+  room(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 90, endHz: 70, duration: 0.22,
+        peak: 0.25, attack: 0.012, release: 0.20 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.15, peak: 0.05, attack: 0.025, release: 0.12,
+        filter: { type: 'lowpass', frequency: 500, Q: 0.7 } });
+  },
+  button_down(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.008, peak: 0.08, attack: 0.001, release: 0.007,
+        filter: { type: 'highpass', frequency: 3000, Q: 0.7 } });
+    audioAddTone(ctx, t + 0.008, out, opts,
+      { type: 'sine', frequency: 520, duration: 0.025, peak: 0.30,
+        attack: 0.002, release: 0.023 });
+  },
+  button_up(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.006, peak: 0.035, attack: 0.001, release: 0.005,
+        filter: { type: 'highpass', frequency: 2800, Q: 0.7 } });
+    audioAddTone(ctx, t + 0.006, out, opts,
+      { type: 'sine', frequency: 420, duration: 0.025, peak: 0.20,
+        attack: 0.002, release: 0.023 });
+  },
+  gate_open(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 80, endHz: 120, duration: 0.16,
+        peak: 0.30, attack: 0.008, release: 0.14 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.18, peak: 0.12, attack: 0.012, release: 0.16,
+        filter: { type: 'lowpass', startHz: 180, endHz: 500, Q: 0.8 } });
+  },
+  gate_close(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 120, endHz: 60, duration: 0.14,
+        peak: 0.30, attack: 0.003, release: 0.13 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.07, peak: 0.12, attack: 0.002, release: 0.065,
+        filter: { type: 'lowpass', frequency: 450, Q: 0.8 } });
+  },
+  ghost_spawn(ctx, t, out, opts) {
+    const lethal = !!opts.lethal, root = lethal ? 330 : 660;
+    const d = 0.49, peak = lethal ? 0.16 : 0.12;
+    const filter = audioTrackNode(opts._voice, ctx.createBiquadFilter(), false);
+    filter.type = 'lowpass'; audioParamValue(filter.frequency, 2000, t);
+    const mix = audioTrackNode(opts._voice, ctx.createGain(), false);
+    audioSetEnvelope(mix.gain, t, d, peak, 0.12, 0.25);
+    filter.connect(mix); mix.connect(out);
+    audioAddTone(ctx, t, filter, opts,
+      { type: 'sine', frequency: root, duration: d, peak: 0.55,
+        attack: 0.12, release: 0.25, tremolo: { frequency: 6, depth: 0.16 } });
+    audioAddTone(ctx, t, filter, opts,
+      { type: 'sine', frequency: root + 4, duration: d, peak: 0.45,
+        attack: 0.12, release: 0.25, tremolo: { frequency: 6, depth: 0.16 } });
+  },
+  ghost_end(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 700, endHz: 300, duration: 0.12,
+        peak: 0.10, attack: 0.003, release: 0.11 });
+  },
+  ghost_hum(ctx, t, out, opts) {
+    const d = opts.testDuration || 2;
+    const filter = audioTrackNode(opts._voice, ctx.createBiquadFilter(), false);
+    filter.type = 'lowpass'; audioParamValue(filter.frequency, 300, t);
+    const mix = audioTrackNode(opts._voice, ctx.createGain(), false);
+    audioSetEnvelope(mix.gain, t, d, 0.10, 0.12, 0.22);
+    filter.connect(mix); mix.connect(out);
+    audioAddTone(ctx, t, filter, opts,
+      { type: 'sine', frequency: 82, duration: d, peak: 0.6,
+        attack: 0.12, release: 0.22 });
+    audioAddTone(ctx, t, filter, opts,
+      { type: 'sine', frequency: 123, duration: d, peak: 0.4,
+        attack: 0.12, release: 0.22 });
+  },
+  ghost_kill(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 440, endHz: 880, duration: 0.06,
+        peak: 0.30, attack: 0.002, release: 0.055 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.12, peak: 0.10, attack: 0.002, release: 0.11,
+        filter: { type: 'bandpass', startHz: 1600, endHz: 900, Q: 0.8 } });
+    for (let i = 0; i < 6; i++) audioAddTone(ctx, t + i * 0.018, out, opts,
+      { type: 'sine', frequency: audioRandom(1500, 3000), duration: 0.012,
+        peak: 0.045, attack: 0.001, release: 0.011 });
+  },
+  door_slide(ctx, t, out, opts) {
+    const d = opts.testDuration || 2;
+    audioAddNoise(ctx, t, out, opts,
+      { duration: d, peak: 0.04, attack: 0.15, release: 0.15,
+        filter: { type: 'bandpass', frequency: 500, Q: 3 } });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', frequency: 140, duration: d, peak: 0.03,
+        attack: 0.15, release: 0.15,
+        tremolo: { frequency: 1, depth: 0.25 } });
+  },
+  swap(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 700, endHz: 450, duration: 0.07,
+        peak: 0.18, attack: 0.003, release: 0.065 });
+    audioAddTone(ctx, t + 0.05, out, opts,
+      { type: 'sine', startHz: 450, endHz: 700, duration: 0.07,
+        peak: 0.18, attack: 0.003, release: 0.065 });
+  },
+  shift(ctx, t, out, opts) {
+    for (let i = 0; i < 2; i++) {
+      const at = t + i * 0.055;
+      audioAddTone(ctx, at, out, opts,
+        { type: 'sine', frequency: 320, duration: 0.03, peak: 0.22,
+          attack: 0.002, release: 0.028 });
+      audioAddNoise(ctx, at, out, opts,
+        { duration: 0.02, peak: 0.06, attack: 0.001, release: 0.019,
+          filter: { type: 'lowpass', frequency: 2200, Q: 0.7 } });
+    }
+  },
+  nope(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'square', frequency: 110, duration: 0.07, peak: 0.15,
+        attack: 0.002, release: 0.065,
+        filter: { type: 'lowpass', frequency: 400, Q: 0.7 } });
+    audioAddNoise(ctx, t + 0.01, out, opts,
+      { duration: 0.012, peak: 0.035, attack: 0.001, release: 0.011,
+        filter: { type: 'highpass', frequency: 2200, Q: 0.7 } });
+  },
+  platform(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 110, endHz: 55, duration: 0.12,
+        peak: 0.30, attack: 0.003, release: 0.11 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.045, peak: 0.09, attack: 0.002, release: 0.04,
+        filter: { type: 'lowpass', frequency: 1200, Q: 0.7 } });
+    audioAddTone(ctx, t + 0.02, out, opts,
+      { type: 'sine', frequency: 1400, duration: 0.02, peak: 0.08,
+        attack: 0.001, release: 0.019 });
+  },
+  narrator_tick(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'triangle', frequency: 900, duration: 0.012, peak: 0.05,
+        attack: 0.001, release: 0.011 });
+  },
+  end_chord(ctx, t, out, opts) {
+    for (const f of [220, 329.6, 440, 554.4])
+      audioAddTone(ctx, t, out, opts,
+        { type: 'sine', frequency: f, duration: 2.4, peak: 0.08,
+          attack: 0.4, release: 2.0,
+          filter: { type: 'lowpass', frequency: 1500, Q: 0.7 } });
+  },
+  mute_blip(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', frequency: 700, duration: 0.02, peak: 0.045,
+        attack: 0.002, release: 0.018 });
+  },
+  ui_move(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', frequency: 880, duration: 0.025, peak: 0.12,
+        attack: 0.002, release: 0.023 });
+    audioAddTone(ctx, t, out, opts,
+      { type: 'triangle', frequency: 1320, duration: 0.015, peak: 0.045,
+        attack: 0.001, release: 0.014 });
+  },
+  ui_select(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 520, endHz: 780, duration: 0.07,
+        peak: 0.18, attack: 0.003, release: 0.065 });
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.012, peak: 0.035, attack: 0.001, release: 0.011,
+        filter: { type: 'highpass', frequency: 2400, Q: 0.7 } });
+  },
+  ui_back(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 600, endHz: 400, duration: 0.07,
+        peak: 0.15, attack: 0.003, release: 0.065 });
+  },
+  ui_locked(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'square', frequency: 150, duration: 0.09, peak: 0.12,
+        attack: 0.003, release: 0.085,
+        filter: { type: 'lowpass', frequency: 500, Q: 0.7 } });
+  },
+  ui_lang(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.12, peak: 0.10, attack: 0.01, release: 0.10,
+        filter: { type: 'bandpass', startHz: 500, endHz: 2500, Q: 0.8 } });
+  },
+  ui_yes(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 520, endHz: 390, duration: 0.08,
+        peak: 0.14, attack: 0.003, release: 0.075 });
+    audioAddTone(ctx, t + 0.085, out, opts,
+      { type: 'sine', startHz: 460, endHz: 340, duration: 0.08,
+        peak: 0.11, attack: 0.003, release: 0.075 });
+  },
+  ui_no(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, opts,
+      { type: 'sine', startHz: 390, endHz: 520, duration: 0.08,
+        peak: 0.12, attack: 0.003, release: 0.075 });
+    audioAddTone(ctx, t + 0.085, out, opts,
+      { type: 'sine', startHz: 430, endHz: 570, duration: 0.08,
+        peak: 0.10, attack: 0.003, release: 0.075 });
+  },
+  ui_open(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.12, peak: 0.10, attack: 0.004, release: 0.11,
+        filter: { type: 'lowpass', startHz: 3000, endHz: 350, Q: 0.8 } });
+  },
+  ui_close(ctx, t, out, opts) {
+    audioAddNoise(ctx, t, out, opts,
+      { duration: 0.12, peak: 0.09, attack: 0.004, release: 0.11,
+        filter: { type: 'lowpass', startHz: 350, endHz: 3000, Q: 0.8 } });
+  },
+  ui_depends(ctx, t, out, opts) {
+    for (let i = 0; i < 2; i++) {
+      const at = t + i * 0.095;
+      audioAddTone(ctx, at, out, opts,
+        { type: 'sine', frequency: i ? 230 : 190, duration: 0.045,
+          peak: 0.08, attack: 0.002, release: 0.043 });
+      audioAddNoise(ctx, at, out, opts,
+        { duration: 0.018, peak: 0.025, attack: 0.001, release: 0.017,
+          filter: { type: 'lowpass', frequency: 1200, Q: 0.7 } });
+    }
+  },
+  ambient_drip(ctx, t, out, opts) {
+    audioAddTone(ctx, t, out, { ...opts, rate: audioRandom(0.96, 1.04) },
+      { type: 'sine', frequency: audioRandom(1500, 2200), duration: 0.30,
+        peak: 0.035, attack: 0.002, release: 0.29 });
+  },
+};
+
+const SOUND_BUS = {
+  mute_blip: 'ui', ui_move: 'ui', ui_select: 'ui', ui_back: 'ui', ui_locked: 'ui',
+  ui_lang: 'ui', ui_yes: 'ui', ui_no: 'ui', ui_open: 'ui', ui_close: 'ui',
+  ui_depends: 'ui', ambient_drip: 'ambient',
+};
+
+const SOUND_COOLDOWN = {
+  jump: 45, flip: 100, land: 120, step: 40,
+  death_spike: 80, death_lava: 80, death_ghost: 80, death: 80,
+  tally_scratch: 120, spike_pop: 50, portal: 450, room: 80,
+  button_down: 40, button_up: 40, gate_open: 150, gate_close: 150,
+  ghost_spawn: 40, ghost_end: 40, ghost_kill: 80, swap: 40, shift: 40,
+  nope: 80, platform: 40, narrator_tick: 40, end_chord: 1800, mute_blip: 80,
+  ui_move: 30, ui_select: 60, ui_back: 60, ui_locked: 60, ui_lang: 90,
+  ui_yes: 70, ui_no: 70, ui_open: 80, ui_close: 80, ui_depends: 250,
+  ambient_drip: 10000,
+};
+
+const SOUND_LOW_PRIORITY = new Set(['step', 'ui_move', 'narrator_tick']);
+const SOUND_CATALOGUE = [
+  'jump', 'flip', 'land', 'step', 'death_spike', 'death_lava', 'death_ghost',
+  'death', 'tally_scratch', 'spike_pop', 'portal', 'room', 'button_down',
+  'button_up', 'gate_open', 'gate_close', 'ghost_spawn', 'ghost_end',
+  'ghost_hum', 'ghost_kill', 'door_slide', 'swap', 'shift', 'nope', 'platform',
+  'narrator_tick', 'end_chord', 'mute_blip', 'ui_move', 'ui_select', 'ui_back',
+  'ui_locked', 'ui_lang', 'ui_yes', 'ui_no', 'ui_open', 'ui_close', 'ui_depends',
+  'ambient_drip',
+];
+
+const AUDIO = (() => {
+  let context = null, unavailable = false, muted = false, muffled = true;
+  let master = null, compressor = null, busSfx = null, busUi = null, busAmbient = null;
+  let muffleFilter = null, convolver = null, sfxReverbSend = null;
+  let noiseBuffer = null, impulseBuffer = null, ambient = null;
+  let ghostHum = null, doorSlide = null;
+  let ambientPaletteAct = 1, ambientPalette = null, ambientDetune = 0;
+  let ambientNextDrip = 0, ambientLastDrip = -Infinity;
+  let duckUntil = 0, duckLevel = 1;
+  let voiceSerial = 0, auditionIndex = -1;
+  const voices = new Set(), lastPlayed = new Map();
+
+  function now() { return context ? context.currentTime : 0; }
+  function safeDisconnect(node) { try { if (node && node.disconnect) node.disconnect(); } catch (e) {} }
+  function target(param, value, at, timeConstant) {
+    if (!param) return;
+    try {
+      if (param.cancelScheduledValues) param.cancelScheduledValues(at);
+      if (param.setTargetAtTime) param.setTargetAtTime(value, at, Math.max(0.001, timeConstant || 0.03));
+      else if (param.setValueAtTime) param.setValueAtTime(value, at);
+      else param.value = value;
+    } catch (e) { try { param.value = value; } catch (_) {} }
+  }
+  function filteredImpulse(ctx) {
+    const seconds = 0.7;
+    const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+    const b = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = b.getChannelData(ch);
+      let low = 0;
+      for (let i = 0; i < length; i++) {
+        const white = audioRandomUnit() * 2 - 1;
+        low += 0.16 * (white - low);
+        const decay = Math.pow(1 - i / length, 3.2);
+        data[i] = low * decay * 0.34;
+      }
+    }
+    return b;
+  }
+  function makeNoiseBuffer(ctx) {
+    const length = Math.max(1, Math.floor(ctx.sampleRate * 2));
+    const b = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = b.getChannelData(0);
+    for (let i = 0; i < length; i++) data[i] = audioRandomUnit() * 2 - 1;
+    return b;
+  }
+  function createGraph() {
+    if (context || unavailable) return !!context;
+    if (!CONFIG.AUDIO.enabled) return false;
+    let ctx = null;
+    try {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) { unavailable = true; return false; }
+      ctx = new Ctor();
+      context = ctx;
+      noiseBuffer = makeNoiseBuffer(ctx);
+      impulseBuffer = filteredImpulse(ctx);
+
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : CONFIG.AUDIO.master;
+      compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -14;
+      compressor.ratio.value = 4;
+      compressor.attack.value = 0.005;
+      compressor.release.value = 0.15;
+      master.connect(compressor);
+      compressor.connect(ctx.destination);
+
+      busSfx = ctx.createGain();
+      busSfx.gain.value = CONFIG.AUDIO.sfx * (muffled ? 0.6 : 1);
+      busUi = ctx.createGain();
+      busUi.gain.value = CONFIG.AUDIO.ui;
+      busAmbient = ctx.createGain();
+      busAmbient.gain.value = CONFIG.AUDIO.ambient;
+      muffleFilter = ctx.createBiquadFilter();
+      muffleFilter.type = 'lowpass';
+      muffleFilter.frequency.value = muffled ? 900 : 18000;
+      convolver = ctx.createConvolver();
+      convolver.buffer = impulseBuffer;
+      sfxReverbSend = ctx.createGain();
+      sfxReverbSend.gain.value = CONFIG.AUDIO.reverbWet;
+
+      busSfx.connect(muffleFilter);
+      busSfx.connect(sfxReverbSend);
+      sfxReverbSend.connect(convolver);
+      convolver.connect(master);
+      busAmbient.connect(muffleFilter);
+      muffleFilter.connect(master);
+      busUi.connect(master);
+      return true;
+    } catch (e) {
+      unavailable = true;
+      if (ctx) { try { ctx.close(); } catch (_) {} }
+      context = null;
+      master = compressor = busSfx = busUi = busAmbient = null;
+      muffleFilter = convolver = sfxReverbSend = null;
+      noiseBuffer = impulseBuffer = null;
+      return false;
+    }
+  }
+  function startAmbient() {
+    if (ambient || !context || unavailable) return;
+    try {
+      const ctx = context, t = ctx.currentTime;
+      const nodes = [], sources = [];
+      ambient = { nodes, sources, disposed: false };
+      const droneFilter = ctx.createBiquadFilter();
+      droneFilter.type = 'lowpass'; droneFilter.frequency.value = 400; droneFilter.Q.value = 0.7;
+      const airFilter = ctx.createBiquadFilter();
+      airFilter.type = 'highpass'; airFilter.frequency.value = 2000; airFilter.Q.value = 0.7;
+      const noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'lowpass'; noiseFilter.frequency.value = 300; noiseFilter.Q.value = 0.7;
+      const mix = ctx.createGain();
+      const breath = ctx.createGain(); breath.gain.value = 1;
+      const droneLevel = ctx.createGain(); droneLevel.gain.value = 1;
+      const airGain = ctx.createGain(); airGain.gain.value = 0;
+      const roomGain = ctx.createGain(); roomGain.gain.value = 0.045;
+      droneFilter.connect(droneLevel); droneLevel.connect(mix);
+      airFilter.connect(airGain); airGain.connect(mix);
+      noiseFilter.connect(roomGain); roomGain.connect(mix);
+      mix.connect(breath); breath.connect(busAmbient);
+      nodes.push(droneFilter, airFilter, noiseFilter, mix, breath,
+        droneLevel, airGain, roomGain);
+
+      const root = ctx.createOscillator(); root.type = 'sine';
+      const fifth = ctx.createOscillator(); fifth.type = 'sine';
+      const octave = ctx.createOscillator(); octave.type = 'sine';
+      const wobble = ctx.createOscillator(); wobble.type = 'sine';
+      const rootGain = ctx.createGain(); rootGain.gain.value = 0.12;
+      const fifthGain = ctx.createGain(); fifthGain.gain.value = 0.065;
+      const octaveGain = ctx.createGain(); octaveGain.gain.value = 0.028;
+      const wobbleGain = ctx.createGain(); wobbleGain.gain.value = 0;
+      root.connect(rootGain); fifth.connect(fifthGain); octave.connect(octaveGain);
+      wobble.connect(wobbleGain);
+      rootGain.connect(droneFilter); fifthGain.connect(droneFilter);
+      octaveGain.connect(droneFilter); wobbleGain.connect(droneFilter);
+      nodes.push(rootGain, fifthGain, octaveGain, wobbleGain);
+      for (const o of [root, fifth, octave, wobble]) {
+        nodes.push(o); sources.push(o); o.onended = () => safeDisconnect(o); o.start(t);
+      }
+
+      const room = ctx.createBufferSource(); room.buffer = noiseBuffer; room.loop = true;
+      room.connect(noiseFilter); nodes.push(room); sources.push(room);
+      room.onended = () => safeDisconnect(room); room.start(t, audioRandomUnit() * 1.9);
+      const air = ctx.createBufferSource(); air.buffer = noiseBuffer; air.loop = true;
+      air.connect(airFilter); nodes.push(air); sources.push(air);
+      air.onended = () => safeDisconnect(air); air.start(t, audioRandomUnit() * 1.9);
+
+      const cutoffLfo = ctx.createOscillator(), cutoffDepth = ctx.createGain();
+      cutoffLfo.type = 'sine'; cutoffLfo.frequency.value = 0.05; cutoffDepth.gain.value = 120;
+      cutoffLfo.connect(cutoffDepth); cutoffDepth.connect(droneFilter.frequency);
+      nodes.push(cutoffDepth, cutoffLfo); sources.push(cutoffLfo);
+      cutoffLfo.onended = () => safeDisconnect(cutoffLfo); cutoffLfo.start(t);
+      const gainLfo = ctx.createOscillator(), gainDepth = ctx.createGain();
+      gainLfo.type = 'sine'; gainLfo.frequency.value = 0.03; gainDepth.gain.value = 0.25;
+      gainLfo.connect(gainDepth); gainDepth.connect(breath.gain);
+      nodes.push(gainDepth, gainLfo); sources.push(gainLfo);
+      gainLfo.onended = () => safeDisconnect(gainLfo); gainLfo.start(t);
+
+      Object.assign(ambient, {
+        droneFilter, airGain, root, fifth, octave, wobble,
+        rootGain, fifthGain, octaveGain, wobbleGain, breath,
+      });
+      const resolved = paletteForAct(1);
+      applyPalette(resolved, true);
+      ambientNextDrip = t + audioRandom(14, 35);
+      ambientLastDrip = -Infinity;
+    } catch (e) {
+      unavailable = true;
+      silenceGraph();
+    }
+  }
+  function stopAmbient() {
+    if (!ambient) return;
+    const a = ambient;
+    ambient = null;
+    a.disposed = true;
+    for (const source of a.sources) {
+      try { source.stop(); } catch (e) {}
+      safeDisconnect(source);
+    }
+    for (const node of a.nodes) safeDisconnect(node);
+  }
+  function silenceGraph() {
+    for (const voice of Array.from(voices)) stopVoice(voice);
+    stopContinuous(ghostHum); ghostHum = null;
+    stopContinuous(doorSlide); doorSlide = null;
+    stopAmbient();
+    if (context && context.close) {
+      try { const p = context.close(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
+  }
+  function paletteForAct(act) {
+    const bank = CONFIG.AUDIO.acts || {};
+    let n = Math.max(1, Math.floor(Number(act) || 1));
+    while (n > 1 && !bank[n]) n--;
+    return { act: bank[n] ? n : 1, values: bank[n] || bank[1] };
+  }
+  function applyPalette(resolved, immediate) {
+    if (!ambient || !resolved.values) return;
+    const a = ambient, p = resolved.values, t = now();
+    const tc = immediate ? 0.001 : 0.5;
+    target(a.root.frequency, p.root, t, tc);
+    target(a.fifth.frequency, p.fifth, t, tc);
+    target(a.octave.frequency, p.root * 2, t, tc);
+    target(a.wobble.frequency, p.root * Math.pow(2, (p.wobbleCents || 0) / 1200), t, tc);
+    target(a.wobbleGain.gain, (p.wobbleCents ? 0.014 : 0), t, tc);
+    target(a.airGain.gain, p.airLevel || 0, t, tc);
+    ambientPaletteAct = resolved.act;
+    ambientPalette = p;
+  }
+  function stopVoice(voice) {
+    if (!voice || voice.cleaned) return;
+    for (const source of voice.sources) {
+      try { source.stop(); } catch (e) {}
+    }
+    voice.cleanup();
+  }
+  function admitVoice(name) {
+    const cap = Math.max(1, Math.floor(CONFIG.AUDIO.maxVoices || 28));
+    if (voiceCount() < cap) return true;
+    if (SOUND_LOW_PRIORITY.has(name)) return false;
+    let victim = null;
+    for (const voice of voices) {
+      if (voice.lowPriority) { victim = voice; break; }
+    }
+    if (!victim) return false;
+    stopVoice(victim);
+    return voiceCount() < cap;
+  }
+  function voiceCount() {
+    return voices.size + (ambient ? 1 : 0) + (ghostHum ? 1 : 0) + (doorSlide ? 1 : 0);
+  }
+  function duck(level, duration) {
+    if (!CONFIG.AUDIO.ducking || !context || !busAmbient) return;
+    const t = now();
+    duckLevel = Math.min(duckLevel, level);
+    duckUntil = Math.max(duckUntil, t + duration);
+    target(busAmbient.gain, CONFIG.AUDIO.ambient * duckLevel, t, 0.025);
+  }
+  function play(name, options) {
+    const opts = options || {};
+    if (!CONFIG.AUDIO.enabled || unavailable || muted || !context || !SOUNDS[name]) return false;
+    const tNow = now();
+    const cooldownKey = opts.cooldownKey || name;
+    const last = lastPlayed.get(cooldownKey);
+    const gap = Math.max(0, (SOUND_COOLDOWN[name] === undefined ? 40 : SOUND_COOLDOWN[name])) / 1000;
+    if (last !== undefined && tNow - last < gap) return false;
+    if (!admitVoice(name)) return false;
+
+    const busKind = SOUND_BUS[name] || 'sfx';
+    const bus = busKind === 'ui' ? busUi : busKind === 'ambient' ? busAmbient : busSfx;
+    if (!bus) return false;
+    const delay = Math.max(0, Number(opts.delay) || 0);
+    const t = tNow + delay;
+    let output = null, panner = null, voice = null;
+    try {
+      voice = {
+        id: ++voiceSerial, name, lowPriority: SOUND_LOW_PRIORITY.has(name),
+        nodes: [], sources: [], sourceCount: 0, endedCount: 0, cleaned: false,
+        cleanup() {
+          if (this.cleaned) return;
+          this.cleaned = true;
+          voices.delete(this);
+          for (const node of this.nodes) safeDisconnect(node);
+          this.nodes.length = 0; this.sources.length = 0;
+        },
+      };
+      voices.add(voice);
+      output = audioTrackNode(voice, context.createGain(), false);
+      const volume = opts.gain === undefined ? 1 : audioClamp(Number(opts.gain) || 0, 0, 2);
+      audioParamValue(output.gain, volume, t);
+      let tail = output;
+      if (CONFIG.AUDIO.panning && Number.isFinite(opts.pan) && context.createStereoPanner) {
+        panner = audioTrackNode(voice, context.createStereoPanner(), false);
+        audioParamValue(panner.pan, audioClamp(opts.pan, -1, 1), t);
+        output.connect(panner); tail = panner;
+      }
+      tail.connect(bus);
+      const requestedWet = opts.reverbSend === undefined ? CONFIG.AUDIO.reverbWet :
+        audioClamp(Number(opts.reverbSend) || 0, 0, 1);
+      if (busKind !== 'ui' && convolver && requestedWet > CONFIG.AUDIO.reverbWet) {
+        const extraSend = audioTrackNode(voice, context.createGain(), false);
+        const busScale = busKind === 'ambient' ? CONFIG.AUDIO.ambient :
+          CONFIG.AUDIO.sfx * (muffled ? 0.6 : 1);
+        extraSend.gain.value = busScale * (requestedWet - CONFIG.AUDIO.reverbWet);
+        tail.connect(extraSend); extraSend.connect(convolver);
+      }
+      const internal = Object.assign({}, opts, {
+        _voice: voice, _noiseBuffer: noiseBuffer,
+      });
+      SOUNDS[name](context, t, output, internal);
+      if (!voice.sourceCount) voice.cleanup();
+      else if (name.startsWith('death_') || name === 'death') duck(0.707, 0.25);
+      if (name === 'portal') duck(0.631, Number(opts.duration) || 0.45);
+      lastPlayed.set(cooldownKey, tNow);
+      return true;
+    } catch (e) {
+      if (voice) stopVoice(voice);
+      unavailable = true;
+      silenceGraph();
+      return false;
+    }
+  }
+  function updateGhostHum(game) {
+    if (!context || !busSfx) return;
+    const t = now();
+    let nearest = null, distance = Infinity;
+    const mayHum = CONFIG.AUDIO.ghostHum && game && game.mode === 'playing' &&
+      game.state === 'playing' && game.level && game.level.def &&
+      Array.isArray(game.level.def.rules) &&
+      game.level.def.rules.includes('ghostEcho');
+    const ghosts = mayHum && game.ruleVars.ghostEcho ? game.ruleVars.ghostEcho.ghosts : [];
+    if (ghosts) for (const g of ghosts) {
+      if (!g.active || !g.lethal) continue;
+      const dx = g.cx - (player.x + player.w / 2), dy = g.cy - (player.y + player.h / 2);
+      const d = Math.hypot(dx, dy);
+      if (d < distance) { distance = d; nearest = g; }
+    }
+    let wanted = 0, pan = 0;
+    if (nearest) {
+      const near = 1.5 * TILE, far = 7 * TILE;
+      const u = audioClamp((distance - near) / (far - near), 0, 1);
+      const smooth = u * u * (3 - 2 * u);
+      wanted = 0.12 * (1 - smooth);
+      pan = audioPanForX(nearest.cx);
+    }
+    if (ghostHum && ghostHum.testUntil > t) { wanted = 0.12; pan = 0; }
+    if (wanted > 0) {
+      if (!ghostHum) ghostHum = createGhostHum();
+      if (!ghostHum) return;
+      ghostHum.stopAt = 0;
+      target(ghostHum.amp.gain, wanted, t, 0.08);
+      target(ghostHum.panner.pan, pan, t, 0.08);
+    } else if (ghostHum) {
+      if (!ghostHum.stopAt) {
+        ghostHum.stopAt = t + 0.22;
+        target(ghostHum.amp.gain, 0.0001, t, 0.06);
+      } else if (t >= ghostHum.stopAt) {
+        stopContinuous(ghostHum); ghostHum = null;
+      }
+    }
+  }
+  function createGhostHum() {
+    try {
+      const c = context, nodes = [], sources = [];
+      const filter = c.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 300;
+      const mix = c.createGain(); mix.gain.value = 0.0001;
+      const panner = c.createStereoPanner ? c.createStereoPanner() : c.createGain();
+      if (panner.pan) panner.pan.value = 0;
+      const a = c.createOscillator(), b = c.createOscillator();
+      a.type = b.type = 'sine'; a.frequency.value = 82; b.frequency.value = 123;
+      const ga = c.createGain(), gb = c.createGain(); ga.gain.value = 0.6; gb.gain.value = 0.4;
+      a.connect(ga); b.connect(gb); ga.connect(filter); gb.connect(filter);
+      filter.connect(mix); mix.connect(panner); panner.connect(busSfx);
+      nodes.push(filter, mix, panner, ga, gb); sources.push(a, b);
+      for (const s of sources) { s.start(); s.onended = () => safeDisconnect(s); }
+      return { nodes, sources, filter, amp: mix, panner, stopAt: 0, testUntil: 0 };
+    } catch (e) {
+      unavailable = true; silenceGraph(); return null;
+    }
+  }
+  function updateDoorSlide(game) {
+    if (!context || !busSfx) return;
+    const t = now();
+    const v = game && game.mode === 'playing' && game.state === 'playing' &&
+      game.ruleVars && game.ruleVars.shyDoor;
+    const moving = !!(v && v.moving && v.progress < 1 &&
+      (Math.abs(v.targetX - v.startX) + Math.abs(v.targetY - v.startY) > 0));
+    const testing = doorSlide && doorSlide.testUntil > t;
+    if (moving || testing) {
+      if (!doorSlide) doorSlide = createDoorSlide();
+      if (!doorSlide) return;
+      doorSlide.stopAt = 0;
+      const pan = testing && !moving ? 0 : audioPanForX(game.door.x + game.door.w / 2);
+      target(doorSlide.amp.gain, 1, t, 0.05);
+      if (doorSlide.panner.pan) target(doorSlide.panner.pan, pan, t, 0.08);
+      const phase = game && Number.isFinite(game.stateTime) ? game.stateTime * Math.PI / 30 : t * Math.PI * 2;
+      target(doorSlide.toneGain.gain, 0.03 * (0.7 + 0.3 * (0.5 + 0.5 * Math.sin(phase))), t, 0.04);
+    } else if (doorSlide) {
+      if (!doorSlide.stopAt) {
+        doorSlide.stopAt = t + 0.22;
+        target(doorSlide.amp.gain, 0.0001, t, 0.06);
+      } else if (t >= doorSlide.stopAt) {
+        stopContinuous(doorSlide); doorSlide = null;
+      }
+    }
+  }
+  function createDoorSlide() {
+    try {
+      const c = context, nodes = [], sources = [];
+      const amp = c.createGain(); amp.gain.value = 0.0001;
+      const panner = c.createStereoPanner ? c.createStereoPanner() : c.createGain();
+      if (panner.pan) panner.pan.value = 0;
+      const filter = c.createBiquadFilter(); filter.type = 'bandpass';
+      filter.frequency.value = 500; filter.Q.value = 3;
+      const noise = c.createBufferSource(); noise.buffer = noiseBuffer; noise.loop = true;
+      const noiseGain = c.createGain(); noiseGain.gain.value = 0.04;
+      noise.connect(filter); filter.connect(noiseGain); noiseGain.connect(amp);
+      const osc = c.createOscillator(); osc.type = 'sine'; osc.frequency.value = 140;
+      const toneGain = c.createGain(); toneGain.gain.value = 0.03;
+      osc.connect(toneGain); toneGain.connect(amp);
+      amp.connect(panner); panner.connect(busSfx);
+      nodes.push(amp, panner, filter, noiseGain, toneGain); sources.push(noise, osc);
+      noise.start(0, audioRandomUnit() * 1.9); osc.start();
+      for (const s of sources) s.onended = () => safeDisconnect(s);
+      return { nodes, sources, amp, panner, toneGain, stopAt: 0, testUntil: 0 };
+    } catch (e) {
+      unavailable = true; silenceGraph(); return null;
+    }
+  }
+  function stopContinuous(obj) {
+    if (!obj) return;
+    for (const s of obj.sources || []) {
+      try { s.stop(); } catch (e) {}
+      safeDisconnect(s);
+    }
+    for (const n of obj.nodes || []) safeDisconnect(n);
+  }
+  function resolveAmbient(game) {
+    const act = game && game.level && game.level.def ? game.level.def.act : 1;
+    const resolved = paletteForAct(act || 1);
+    if (!ambientPalette || resolved.act !== ambientPaletteAct) applyPalette(resolved, false);
+    const ts = game && game.levelIndex === 11 && Number.isFinite(game.timeScale)
+      ? Math.max(0.01, game.timeScale) : 1;
+    const cents = 1200 * Math.log2(ts);
+    if (Math.abs(cents - ambientDetune) > 0.25) {
+      const t = now();
+      for (const o of [ambient.root, ambient.fifth, ambient.octave, ambient.wobble])
+        target(o.detune, cents, t, 0.12);
+      ambientDetune = cents;
+    }
+  }
+  function update(game, dt) {
+    if (!context || unavailable) return;
+    try {
+      setMuffled(!game || game.mode !== 'playing');
+      const t = now();
+      if (duckLevel < 1 && t >= duckUntil) {
+        duckLevel = 1;
+        target(busAmbient.gain, CONFIG.AUDIO.ambient, t, 0.133);
+      }
+      if (ambient) {
+        resolveAmbient(game);
+        if (t >= ambientNextDrip) {
+          if (t - ambientLastDrip >= 10) {
+            play('ambient_drip', {
+              pan: audioRandom(-0.4, 0.4), reverbSend: 0.55,
+              cooldownKey: 'ambient_drip',
+            });
+            ambientLastDrip = t;
+          }
+          ambientNextDrip = t + audioRandom(14, 35);
+        }
+      }
+      updateGhostHum(game);
+      updateDoorSlide(game);
+    } catch (e) {
+      // Audio is nonessential: silence and release every audio node rather
+      // than allowing a browser failure to affect gameplay.
+      unavailable = true;
+      silenceGraph();
+    }
+  }
+  function setMuted(value) {
+    muted = !!value;
+    if (master && context) target(master.gain, muted ? 0 : CONFIG.AUDIO.master, now(), 0.012);
+  }
+  function setMuffled(value) {
+    const next = !!value;
+    if (muffled === next && muffleFilter) return;
+    muffled = next;
+    if (!context) return;
+    const t = now();
+    if (muffleFilter) target(muffleFilter.frequency, muffled ? 900 : 18000, t, 0.067);
+    if (busSfx) target(busSfx.gain,
+      CONFIG.AUDIO.sfx * (muffled ? 0.6 : 1), t, 0.067);
+  }
+  function unlock() {
+    if (!CONFIG.AUDIO.enabled || unavailable) return false;
+    if (!createGraph()) return false;
+    try {
+      if (context.state === 'suspended' && context.resume) {
+        const result = context.resume(); if (result && result.catch) result.catch(() => {});
+      }
+      startAmbient();
+      return true;
+    } catch (e) {
+      unavailable = true;
+      silenceGraph();
+      return false;
+    }
+  }
+  function onVisibility(hidden) {
+    if (!context || unavailable) return;
+    try {
+      const result = hidden
+        ? (context.suspend ? context.suspend() : null)
+        : (context.resume ? context.resume() : null);
+      if (result && result.catch) result.catch(() => {});
+    } catch (e) {}
+  }
+  function audition(delta) {
+    if (auditionIndex < 0)
+      auditionIndex = delta >= 0 ? 0 : SOUND_CATALOGUE.length - 1;
+    else auditionIndex = (auditionIndex + delta + SOUND_CATALOGUE.length) % SOUND_CATALOGUE.length;
+    const name = SOUND_CATALOGUE[auditionIndex];
+    play(name, { testDuration: 2, reverbSend: name === 'ghost_hum' ? 0.45 : undefined });
+    return name;
+  }
+  function debugInfo() {
+    const p = ambientPalette || (CONFIG.AUDIO.acts && CONFIG.AUDIO.acts[1]) || {};
+    return {
+      state: !CONFIG.AUDIO.enabled ? 'disabled' : unavailable ? 'unavailable' :
+        context ? context.state : 'locked',
+      voices: voiceCount(), muted, muffled, act: ambientPaletteAct,
+      root: p.root || 55, fifth: p.fifth || 82.4, detune: ambientDetune,
+    };
+  }
+  function dispose() {
+    for (const v of Array.from(voices)) stopVoice(v);
+    stopContinuous(ghostHum); ghostHum = null;
+    stopContinuous(doorSlide); doorSlide = null;
+    stopAmbient();
+    if (context && context.close) { try { const p = context.close(); if (p && p.catch) p.catch(() => {}); } catch (e) {} }
+  }
+  return {
+    play, update, setMuted, setMuffled, unlock, onVisibility, dispose,
+    panForX: audioPanForX, audition, debugInfo,
+  };
+})();
+
+window.addEventListener('pointerdown', () => AUDIO.unlock(), true);
+window.addEventListener('keydown', () => AUDIO.unlock(), true);
+document.addEventListener('visibilitychange', () => AUDIO.onVisibility(document.hidden));
+window.addEventListener('pagehide', () => AUDIO.dispose(), { once: true });
+
+function playGateEdge(game, opened) {
+  const gate = game && game.level && game.level.gateTiles && game.level.gateTiles[0];
+  if (!gate) return;
+  AUDIO.play(opened ? 'gate_open' : 'gate_close', {
+    pan: audioPanForX((gate.tx + 0.5) * TILE),
+  });
+}
+
+function makeDefaultSave() {
+  return { v: 1, lang: CONFIG.LANG, current: 1, highest: 1,
+           total: 0, deaths: {}, done: {}, tiles: {}, sound: true };
+}
+
+function cleanIndexMap(source, kind) {
+  const out = {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return out;
+  for (const [key, value] of Object.entries(source)) {
+    if (!/^\d+$/.test(key)) continue;
+    const idx = Number(key);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= CONFIG.TOTAL_LEVELS) continue;
+    if (kind === 'tiles') {
+      if (!Array.isArray(value)) continue;
+      const seen = new Set(), cells = [];
+      for (const pair of value) {
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        const col = Number(pair[0]), row = Number(pair[1]);
+        if (!Number.isInteger(col) || !Number.isInteger(row) ||
+            col < 0 || row < 0 || col >= COLS || row >= ROWS) continue;
+        const cellKey = col + ',' + row;
+        if (!seen.has(cellKey)) { seen.add(cellKey); cells.push([col, row]); }
+      }
+      out[idx] = cells;
+    } else if (kind === 'done') {
+      if (value) out[idx] = 1;
+    } else {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) out[idx] = Math.floor(n);
+    }
+  }
+  return out;
+}
+
+function readSavedProgress() {
+  const fallback = makeDefaultSave();
+  try {
+    const storage = window.localStorage;
+    const raw = storage && storage.getItem(CONFIG.SAVE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.v !== 1) return fallback;
+    const lang = parsed.lang === 'en' || parsed.lang === 'fa' ? parsed.lang : fallback.lang;
+    const current = Number.isInteger(Number(parsed.current)) ? Number(parsed.current) : 1;
+    const highest = Number.isInteger(Number(parsed.highest)) ? Number(parsed.highest) : 1;
+    const total = Number.isFinite(Number(parsed.total)) ? Math.max(0, Math.floor(Number(parsed.total))) : 0;
+    return {
+      v: 1, lang,
+      current: Math.max(1, Math.min(CONFIG.TOTAL_LEVELS, current)),
+      highest: Math.max(1, Math.min(CONFIG.TOTAL_LEVELS, highest)),
+      total,
+      deaths: cleanIndexMap(parsed.deaths, 'deaths'),
+      done: cleanIndexMap(parsed.done, 'done'),
+      tiles: cleanIndexMap(parsed.tiles, 'tiles'),
+      sound: parsed.sound !== false,
+    };
+  } catch (e) {
+    return fallback;
+  }
+}
+
+let save = readSavedProgress(); // remains live in memory even if storage is blocked
+AUDIO.setMuted(!save.sound);
+
+function persistSave() {
+  save.v = 1;
+  try {
+    const storage = window.localStorage;
+    if (storage && typeof storage.setItem === 'function')
+      storage.setItem(CONFIG.SAVE_KEY, JSON.stringify(save));
+  } catch (e) {
+    // Storage can be disabled in browser tabs or restricted desktop wrappers.
+  }
+}
 
 /* ============================== INPUT ==================================== */
 
@@ -374,7 +1658,7 @@ const Input = {
   debugDigit: 0,         // 1..9 edge: jump straight to that level (debug only)
   debugPrev: false,      // '[' edge: previous level (debug only)
   debugNext: false,      // ']' edge: next level (debug only, same as N)
-  persianToggle: false,  // P edge: Persian narrator smoke test (debug only)
+  languageToggle: false, // L edge: toggles fa/en while debug mode is on
   tallyToggle: false,    // K edge: adds 5 fake tally marks (debug only, visual only)
 };
 
@@ -382,6 +1666,57 @@ const JUMP_CODES = ['ArrowUp', 'KeyW', 'Space'];
 
 function onKeyDown(e) {
   if (e.repeat) return;
+  if (Menu.dependencyPendingIndex !== null) {
+    e.preventDefault();
+    return;
+  }
+
+  // Master mute is intentionally available in every game/menu mode.
+  if (e.code === 'KeyM') {
+    toggleSoundSetting();
+    if (Game.mode === 'farewell') returnToMainMenu();
+    else if (Game.mode === 'playing' && Game.state === 'end') openMenu();
+    e.preventDefault();
+    return;
+  }
+
+  // Fullscreen is available in every mode. A fullscreen keypress on the end
+  // screen also follows the end screen's any-key-to-menu behavior.
+  if (e.code === 'F11') {
+    toggleFullscreen();
+    if (Game.mode === 'farewell') returnToMainMenu();
+    else if (Game.mode === 'playing' && Game.state === 'end') openMenu();
+    e.preventDefault();
+    return;
+  }
+
+  if (Game.mode === 'farewell') {
+    returnToMainMenu();
+    e.preventDefault();
+    return;
+  }
+  if (Game.mode === 'playing' && Game.state === 'end') {
+    openMenu();
+    e.preventDefault();
+    return;
+  }
+  if (Game.mode !== 'playing') {
+    if (handleMenuKeyDown(e)) e.preventDefault();
+    return;
+  }
+  if (e.code === 'Escape') {
+    openMenu();
+    e.preventDefault();
+    return;
+  }
+
+  if (Game.mode === 'playing' && Game.debug && e.code === 'KeyY') {
+    Game.audioLastAudition = AUDIO.audition(e.shiftKey ? -1 : 1);
+    e.preventDefault();
+    return;
+  }
+
+  // Gameplay and debug controls are active only in Game.mode === 'playing'.
   switch (e.code) {
     case 'ArrowLeft':  case 'KeyA': Input.left = true; break;
     case 'ArrowRight': case 'KeyD': Input.right = true; break;
@@ -399,7 +1734,7 @@ function onKeyDown(e) {
     case 'Digit9': Input.debugDigit = 9; break;
     case 'BracketLeft':  Input.debugPrev = true; break;
     case 'BracketRight': Input.debugNext = true; break;
-    case 'KeyP': Input.persianToggle = true; break;
+    case 'KeyL': Input.languageToggle = true; break;
     case 'KeyK': Input.tallyToggle = true; break;
     default:
       if (JUMP_CODES.includes(e.code)) {
@@ -413,6 +1748,7 @@ function onKeyDown(e) {
 }
 
 function onKeyUp(e) {
+  if (Game.mode !== 'playing') return;
   switch (e.code) {
     case 'ArrowLeft':  case 'KeyA': Input.left = false; break;
     case 'ArrowRight': case 'KeyD': Input.right = false; break;
@@ -432,7 +1768,7 @@ window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
 // dropping window focus clears held keys so the player never "sticks"
 window.addEventListener('blur', () => {
-  Input.left = Input.right = Input.jumpHeld = false;
+  clearInputState();
 });
 
 /* ============================ LEVEL DATA ================================= */
@@ -498,7 +1834,7 @@ const LEVELS = [
     act: 1,
     name: 'Peer Pressure',
     rules: ['buttonGate'],
-    narratorEvents: { onButton: 'onButton' }, // event -> STRINGS.levels[3].events key
+    narratorEvents: { onButton: 'onButton' }, // event -> S().levels[3].events key
     grid: [ // level 1's room, but a gate column seals the door route
       "################################",
       "#..............................#",
@@ -945,6 +2281,20 @@ const LEVELS = [
   },
 ];
 
+// Level numbers are one-based. A pathLava room consumes the previous room's
+// winning route, so ordinary level-grid selection must start its prerequisite.
+function dependsOnPrevious(n) {
+  const index = Math.floor(Number(n)) - 1;
+  const def = LEVELS[index];
+  return !!(def && Array.isArray(def.rules) && def.rules.includes('pathLava'));
+}
+
+function precedingNonDependentIndex(index) {
+  let candidate = index - 1;
+  while (candidate >= 0 && dependsOnPrevious(candidate + 1)) candidate--;
+  return Math.max(0, candidate);
+}
+
 // Parses a grid into runtime level data (spawn, door tile, special markers).
 function parseLevelGrid(grid) {
   let spawn = null;
@@ -1081,6 +2431,8 @@ function resetPlayerToSpawn() {
   player.onGround = false;
   player.coyote = 0; player.jumpBuffer = 0;
   player.facing = 1;
+  Game.audioStepTimer = 0;
+  Game.audioStepSide = 1;
   // rule-owned global flags always start fresh on level load AND respawn
   Game.gravityDir = 1;
   Game.keysSwapped = false;
@@ -1144,6 +2496,62 @@ function pathToTiles(path) {
   return out;
 }
 
+// Persistent routes use compact [column,row] tile pairs, not frame-by-frame
+// coordinates. Restoring them at tile centers preserves every gameplay tile
+// the original path recorder marked while keeping the save small.
+function pathToSavedTiles(path) {
+  return pathToTiles(path).map(t => [t.col, t.row]);
+}
+
+function savedTilesToPath(pairs) {
+  if (!Array.isArray(pairs)) return [];
+  return pairs.map(pair => ({
+    x: (Number(pair[0]) + 0.5) * TILE,
+    y: (Number(pair[1]) + 0.5) * TILE,
+  }));
+}
+
+function priorPathForLevel(index) {
+  if (index <= 0) return [];
+  // Debug jumps retain the old stored-route and in-memory fallback behavior.
+  for (let i = index - 1; i >= 0; i--) {
+    const tiles = save.tiles[i];
+    if (Array.isArray(tiles) && tiles.length) return savedTilesToPath(tiles);
+  }
+  if (Game.levelIndex === index - 1 && Game.run.lastWinPath.length)
+    return Game.run.lastWinPath.slice();
+  return [];
+}
+
+function hasRealSavedPath(index) {
+  const tiles = save.tiles && save.tiles[index];
+  return Array.isArray(tiles) && tiles.length > 0 &&
+    savedTilesToPath(tiles).length > 0;
+}
+
+function canContinueDependent(index) {
+  return index > 0 && !!save.done[index - 1] && hasRealSavedPath(index - 1);
+}
+
+function setSavedCurrent(index) {
+  save.current = Math.max(1, Math.min(LEVELS.length, index + 1));
+}
+
+function recordSavedDeath(index) {
+  save.total = Math.max(0, Math.floor(Number(save.total) || 0)) + 1;
+  save.deaths[index] = (Number(save.deaths[index]) || 0) + 1;
+  setSavedCurrent(index);
+  persistSave();
+}
+
+function recordSavedWin(index, path) {
+  save.done[index] = 1;
+  save.tiles[index] = pathToSavedTiles(path);
+  save.highest = Math.max(save.highest, Math.min(CONFIG.TOTAL_LEVELS, index + 2));
+  setSavedCurrent(index + 1 < LEVELS.length ? index + 1 : index);
+  persistSave();
+}
+
 // Records one path sample (hitbox center) every PATH_SAMPLE_EVERY frames.
 function samplePath() {
   const run = Game.run;
@@ -1195,6 +2603,7 @@ function buildEffectiveInput(game) {
 
 function updatePlayer(eff) {
   const p = player;
+  const wasGrounded = p.onGround;
 
   // --- horizontal input: accelerate / friction ---
   const dir = (eff.right ? 1 : 0) - (eff.left ? 1 : 0);
@@ -1221,9 +2630,13 @@ function updatePlayer(eff) {
       Game.gravityDir = -Game.gravityDir;
       p.vy = CONFIG.RULES.flipImpulse * -PHYS.jumpVel * Game.gravityDir;
       // a flip is not a jump: Game.justJumped stays false
+      AUDIO.play('flip', {
+        pan: audioPanForX(p.x + p.w / 2), gravityUp: Game.gravityDir < 0,
+      });
     } else {
       p.vy = PHYS.jumpVel * Game.gravityDir;
       Game.justJumped = true; // rules (jumpShift, swapKeysOnJump) listen for this
+      AUDIO.play('jump', { pan: audioPanForX(p.x + p.w / 2) });
     }
     p.onGround = false;
     p.coyote = 0;
@@ -1247,9 +2660,16 @@ function updatePlayer(eff) {
   // --- integrate, one axis at a time ---
   p.x += p.vx;
   collideX();
+  const impactSpeed = Math.abs(p.vy);
   p.y += p.vy;
   p.onGround = false; // re-detected by collideY if we actually land
   collideY();
+  if (!wasGrounded && p.onGround && impactSpeed >= PHYS.maxFall * 0.25) {
+    const low = PHYS.maxFall * 0.25;
+    const scale = audioClamp((impactSpeed - low) / Math.max(0.001, PHYS.maxFall - low), 0, 1);
+    const sourceGain = (0.12 + 0.23 * scale) / 0.35;
+    AUDIO.play('land', { gain: sourceGain, pan: audioPanForX(p.x + p.w / 2) });
+  }
 
   // --- hazards (stop checking once we die this frame) ---
   let dead = false;
@@ -1264,6 +2684,7 @@ function updatePlayer(eff) {
                        TILE - SPIKE_INSET_X * 2, TILE - SPIKE_INSET_TOP)) {
         dead = true;
         Game.lastDeathCause = 'spike';
+        Game.audioDeathCause = 'spike';
         onPlayerDeath();
       }
     } else if (c === 'v') { // same shrunken hitbox, mirrored top-to-bottom
@@ -1272,6 +2693,7 @@ function updatePlayer(eff) {
                        TILE - SPIKE_INSET_X * 2, TILE - SPIKE_INSET_TOP)) {
         dead = true;
         Game.lastDeathCause = 'spike';
+        Game.audioDeathCause = 'spike';
         onPlayerDeath();
       }
     }
@@ -1283,6 +2705,7 @@ function updatePlayer(eff) {
       if (dead || !Game.hazards.has(tx + ',' + ty)) return;
       dead = true;
       Game.lastDeathCause = 'hazard';
+      Game.audioDeathCause = Game.hazards.get(tx + ',' + ty) === 'lava' ? 'lava' : 'spike';
       onPlayerDeath();
     });
   }
@@ -1292,6 +2715,20 @@ function updatePlayer(eff) {
     const d = Game.door;
     if (rectsOverlap(p.x, p.y, p.w, p.h, d.x, d.y, d.w, d.h)) onPlayerWin();
   }
+
+  const speed = Math.abs(p.vx);
+  if (CONFIG.AUDIO.footsteps && !dead && Game.state === 'playing' && p.onGround &&
+      speed > PHYS.runSpeed * 0.2) {
+    Game.audioStepTimer += STEP_MS / 1000;
+    const ratio = Math.max(0.2, speed / PHYS.runSpeed);
+    const cadence = 0.24 / ratio;
+    if (Game.audioStepTimer >= cadence) {
+      Game.audioStepTimer -= cadence;
+      const pan = audioClamp(audioPanForX(p.x + p.w / 2) + Game.audioStepSide * 0.05, -0.4, 0.4);
+      AUDIO.play('step', { pan });
+      Game.audioStepSide *= -1;
+    }
+  } else Game.audioStepTimer = 0;
 }
 
 /* =============================== RULES =================================== */
@@ -1359,8 +2796,15 @@ const RULES = {
       game.ruleVars.buttonGate = { pressed: false };
     },
     onAttemptStart(game) {
+      const wasOpen = !game.gatesClosed;
+      const wasPressed = game.ruleVars.buttonGate && game.ruleVars.buttonGate.pressed;
+      if (wasPressed && game.level.buttons.length) {
+        const b = game.level.buttons[0];
+        AUDIO.play('button_up', { pan: audioPanForX((b.tx + 0.5) * TILE) });
+      }
       game.gatesClosed = true;
       game.ruleVars.buttonGate = { pressed: false };
+      if (wasOpen) playGateEdge(game, false);
     },
     onUpdate(game) {
       const v = game.ruleVars.buttonGate;
@@ -1371,6 +2815,8 @@ const RULES = {
                          b.tx * TILE + 4, b.ty * TILE + 24, TILE - 8, 16)) {
           v.pressed = true;
           game.gatesClosed = false;
+          AUDIO.play('button_down', { pan: audioPanForX((b.tx + 0.5) * TILE) });
+          playGateEdge(game, true);
           Narrator.event(game, 'onButton');
           break;
         }
@@ -1496,6 +2942,7 @@ const RULES = {
       const key = best.col + ',' + best.row;
       game.hazards.set(key, 'spike');
       v.spikes.push({ key, col: best.col, row: best.row, born: game.stateTime });
+      AUDIO.play('spike_pop', { pan: audioPanForX((best.col + 0.5) * TILE) });
     },
     onDraw(ctx, game) {
       const v = game.ruleVars.deathSpike;
@@ -1520,6 +2967,7 @@ const RULES = {
     },
     onUpdate(game) {
       const v = game.ruleVars.jumpShift;
+      let moved = false, movedX = player.x + player.w / 2;
       if (game.justJumped) {
         for (const lane of game.level.def.shiftLanes) {
           const cols = [];
@@ -1544,6 +2992,7 @@ const RULES = {
             }
             game.mSolid.delete(fromKey);
             game.mSolid.add(toKey);
+            moved = true; movedX = (dest + 0.5) * TILE;
             v.flashes.set(toKey, 14);
           }
         }
@@ -1558,9 +3007,11 @@ const RULES = {
                          dCol * TILE, dRow * TILE, TILE, TILE)) continue;
         game.mSolid.delete(m.fromKey);
         game.mSolid.add(m.toKey);
+        moved = true; movedX = (dCol + 0.5) * TILE;
         v.flashes.set(m.toKey, 14);
         v.pending.splice(i, 1);
       }
+      if (moved) AUDIO.play('shift', { pan: audioPanForX(movedX) });
       for (const [k, f] of v.flashes) {
         if (f <= 1) v.flashes.delete(k); else v.flashes.set(k, f - 1);
       }
@@ -1630,6 +3081,7 @@ const RULES = {
       if (!game.justJumped) return;
       game.keysSwapped = !game.keysSwapped;
       const v = game.ruleVars.swapKeysOnJump;
+      AUDIO.play('swap', { pan: audioPanForX(player.x + player.w / 2) });
       v.t0 = game.stateTime;
       v.x = player.x + player.w / 2; // FX is anchored where the swap happened
       v.y = player.y - 16;           // a little above the head
@@ -1667,10 +3119,11 @@ const RULES = {
      debug keys bypass this entirely (they are not gameplay input). */
   inputDelay: {
     onLevelStart(game) {
-      game.ruleVars.inputDelay = { buf: [] };
+      game.ruleVars.inputDelay = { buf: [], lastActive: false };
     },
     onAttemptStart(game) {
       game.ruleVars.inputDelay.buf.length = 0; // fresh 0.5 s of neutral input
+      game.ruleVars.inputDelay.lastActive = false;
     },
     modifyInput(input, game) {
       const v = game.ruleVars.inputDelay;
@@ -1681,7 +3134,12 @@ const RULES = {
       if (v.buf.length <= CONFIG.RULES.inputDelayFrames)
         return { left: false, right: false, jumpHeld: false,
                  jumpPressed: false, jumpReleased: false };
-      return v.buf.shift(); // the input of N updates ago
+      const delivered = v.buf.shift(); // the input of N updates ago
+      const active = !!(delivered.left || delivered.right || delivered.jumpHeld);
+      if (delivered.jumpPressed || (active && !v.lastActive))
+        AUDIO.play('shift', { pan: audioPanForX(player.x + player.w / 2) });
+      v.lastActive = active;
+      return delivered;
     },
   },
 
@@ -1713,8 +3171,10 @@ const RULES = {
         return input;
       }
       // blocked: ignore horizontally. Shake only on a fresh blocked press.
-      if (dir !== prev && v.cur === 0)
+      if (dir !== prev && v.cur === 0) {
         v.shakeUntil = game.stateTime + 8;        // ~130 ms visual shake
+        AUDIO.play('nope', { pan: audioPanForX(player.x + player.w / 2) });
+      }
       return { ...input, left: false, right: false };
     },
   },
@@ -1777,7 +3237,7 @@ const RULES = {
           killable: def.killable === undefined ? true : def.killable,
           pressesButtons:
             def.pressesButtons === undefined ? true : def.pressesButtons,
-          active: false, cx: 0, cy: 0,
+          active: false, ended: false, cx: 0, cy: 0,
         });
       }
     },
@@ -1791,12 +3251,21 @@ const RULES = {
         const k = t - g.delay;
         if (k < 0) { g.active = false; continue; }
         let idx;
-        if (k <= g.len - 1) idx = g.reverse ? g.len - 1 - k : k;
-        else if (g.endBehavior === 'vanish') { g.active = false; continue; }
-        else idx = g.reverse ? 0 : g.len - 1;          // 'hold'
+        if (k > g.len - 1) {
+          if (!g.ended) {
+            g.ended = true;
+            AUDIO.play('ghost_end', { pan: audioPanForX(g.cx) });
+          }
+          if (g.endBehavior === 'vanish') { g.active = false; continue; }
+          idx = g.reverse ? 0 : g.len - 1;          // 'hold'
+        } else idx = g.reverse ? g.len - 1 - k : k;
+        const wasActive = g.active;
         g.active = true;
         g.cx = g.rec[idx * 2];
         g.cy = g.rec[idx * 2 + 1];
+        if (!wasActive) AUDIO.play('ghost_spawn', {
+          lethal: g.lethal, pan: audioPanForX(g.cx),
+        });
       }
       // lethal overlap: same death handling as spikes, spawn-immunity excepted
       const sx = game.level.spawn.x + player.w / 2;
@@ -1810,6 +3279,7 @@ const RULES = {
         if (rectsOverlap(player.x, player.y, player.w, player.h,
                          g.cx - 14, g.cy - 14, 28, 28)) {
           Game.lastDeathCause = 'ghost';
+          Game.audioDeathCause = 'ghost';
           onPlayerDeath();
           break; // respawn rebuilt v.ghosts — stop iterating this frame
         }
@@ -1850,9 +3320,11 @@ const RULES = {
       game.ruleVars.heldGate = { pressed: new Array(total).fill(false) };
     },
     onAttemptStart(game) {
+      const wasOpen = !game.gatesClosed;
       game.gatesClosed = true;
       const v = game.ruleVars.heldGate;
       for (let i = 0; i < v.pressed.length; i++) v.pressed[i] = false;
+      if (wasOpen) playGateEdge(game, false);
     },
     _buttonOver(game, b) {
       // same overlap test as the level-3 button plate
@@ -1897,6 +3369,7 @@ const RULES = {
     },
     onUpdate(game) {
       const v = game.ruleVars.heldGate;
+      const wasClosed = game.gatesClosed;
       let all = true, i = 0;
       for (const b of game.level.buttons) {
         const p = this._buttonOver(game, b);
@@ -1917,11 +3390,13 @@ const RULES = {
           if (!game.gatesClosed && !this._anyoneOnGate(game))
             game.gatesClosed = true; // still never close onto anyone
         } else game.gatesClosed = false;
+        if (game.gatesClosed !== wasClosed) playGateEdge(game, !game.gatesClosed);
         return;
       }
       if (all) game.gatesClosed = false;
       else if (!game.gatesClosed && !this._anyoneOnGate(game))
         game.gatesClosed = true; // closes only once nobody stands in the tiles
+      if (game.gatesClosed !== wasClosed) playGateEdge(game, !game.gatesClosed);
     },
     onDraw(ctx, game) {
       const v = game.ruleVars.heldGate;
@@ -1995,6 +3470,7 @@ const RULES = {
       const st = game.level.spawnTile, dr = game.level.door;
       const cx = Math.floor((player.x + player.w / 2) / TILE);
       const cy = Math.floor((player.y + player.h / 2) / TILE);
+      let created = 0;
       const tryConvert = (c, r, mustBeSpike) => {
         if (v.cells.length >= CONFIG.RULES.deathPlatformMax) return;
         const ch = game.level.tiles[r][c];
@@ -2013,10 +3489,12 @@ const RULES = {
             !(t.c === c && t.r === r));
         }
         v.cells.push({ col: c, row: r, born: game.stateTime });
+        created++;
       };
       tryConvert(cx, cy, false);
       tryConvert(cx - 1, cy, true);
       tryConvert(cx + 1, cy, true);
+      if (created) AUDIO.play('platform', { pan: audioPanForX((cx + 0.5) * TILE) });
     },
     onDraw(ctx, game) {
       const v = game.ruleVars.deathPlatforms;
@@ -2063,6 +3541,7 @@ const RULES = {
         if (rectsOverlap(player.x, player.y, player.w, player.h,
                          v.cx - 14, v.cy - 14, 28, 28) && falling && above) {
           v.alive = false;
+          AUDIO.play('ghost_kill', { pan: audioPanForX(v.cx) });
           v.burst.length = 0;
           for (let i = 0; i < 9; i++) { // 9 small tint squares, ~300 ms
             const a = Math.random() * Math.PI * 2;
@@ -2306,13 +3785,17 @@ function fitCanvas() {
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-// builds a canvas font string from a CONFIG.FONTS entry (size optionally overridden)
-function fontStr(f, size) {
-  return f.weight + ' ' + (size || f.size) + 'px ' + CONFIG.FONTS.family;
+// Active font family and role metrics follow CONFIG.LANG.
+function activeFonts() {
+  return CONFIG.FONTS[CONFIG.LANG] || CONFIG.FONTS.en;
 }
 
-// Central text draw: THE one place that sets font, direction, color, alpha.
-// A call-site `dir` overrides CONFIG.UI.direction (debug Persian smoke test).
+// Builds a canvas font string from an active-language CONFIG.FONTS entry.
+function fontStr(f, size) {
+  return f.weight + ' ' + (size || f.size) + 'px ' + activeFonts().family;
+}
+
+// Central text draw: language direction is the default; debug text may force LTR.
 function drawText(str, x, y, font, align, alpha, dir) {
   ctx.globalAlpha = (alpha === undefined ? 1 : alpha);
   ctx.font = font;
@@ -2333,21 +3816,16 @@ function roundedRectPath(g, x, y, w, h, r) {
   g.closePath();
 }
 
-// Debug-only Persian smoke test (P while debug mode is on). Deliberately NOT
-// in STRINGS: it only verifies shaping + RTL rendering and never ships.
-const PERSIAN_SMOKE = 'این یک آزمایش است. اتاق ۳ از ۳۰';
-let persianSmoke = false;
-
 // Shrink-to-fit, then wrap (at most TWO centered lines). Centralized so any
 // future long narrator line behaves identically.
-function fitNarrator(text, dir) {
-  const U = CONFIG.UI.narrator, F = CONFIG.FONTS.narrator;
-  ctx.direction = dir;
+function fitNarrator(text) {
+  const U = CONFIG.UI.narrator, F = activeFonts().narrator;
+  ctx.direction = CONFIG.UI.direction;
   const measure = (s, size) => { ctx.font = fontStr(F, size); return ctx.measureText(s).width; };
   let size = F.size;
-  while (size > U.minSize && measure(text, size) > U.maxTextW) size--;
+  while (size > F.minSize && measure(text, size) > U.maxTextW) size--;
   if (measure(text, size) <= U.maxTextW) return { lines: [text], size };
-  // still too wide at minSize: split at the most width-balanced word boundary
+  // still too wide at the language's minimum size: split at the most width-balanced word boundary
   const words = text.split(' ');
   if (words.length === 1) return { lines: [text], size };
   let best = null;
@@ -2359,17 +3837,14 @@ function fitNarrator(text, dir) {
   return { lines: best.lines, size };
 }
 
-// Narrator line in the reserved top-center band (rows 1-2), on a subtle
-// rounded pill with a soft shadow. Visible for the whole level (no fading).
 function drawNarrator() {
-  const text = (persianSmoke && Game.debug) ? PERSIAN_SMOKE : Narrator.current;
+  const text = Narrator.current;
   if (!text) return;
-  const dir = (persianSmoke && Game.debug) ? 'rtl' : CONFIG.UI.direction;
   const U = CONFIG.UI.narrator;
-  const fit = fitNarrator(text, dir);
+  const fit = fitNarrator(text);
   const lh = Math.round(fit.size * U.lineHeight);
-  const font = fontStr(CONFIG.FONTS.narrator, fit.size);
-  ctx.direction = dir; ctx.font = font;
+  const font = fontStr(activeFonts().narrator, fit.size);
+  ctx.direction = CONFIG.UI.direction; ctx.font = font;
   const textW = Math.max(...fit.lines.map(l => ctx.measureText(l).width));
   const blockH = fit.lines.length * lh;
   const pillW = Math.min(U.maxPillW, textW + U.padX * 2);
@@ -2387,7 +3862,7 @@ function drawNarrator() {
   ctx.restore();
   fit.lines.forEach((line, i) => {
     const baseY = U.y - blockH / 2 + lh * i + lh * 0.7; // blocks centered at U.y
-    drawText(line, U.x, baseY, font, 'center', undefined, dir);
+    drawText(line, U.x, baseY, font, 'center');
   });
 }
 
@@ -2745,57 +4220,73 @@ function drawDebug() {
   }
   ctx.lineWidth = 1;
 
+  drawText(S().debug.progress(Game.mode, save.highest, save.current, save.total),
+           CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yProgress,
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
+
   // STEP 5B: deathPlatform count + scripted-ghost state + gate mode
   const dpDbg = Game.ruleVars.deathPlatforms;
   const sgDbg = Game.ruleVars.scriptedGhost;
-  drawText(STRINGS.debug.act3State(
+  drawText(S().debug.act3State(
              dpDbg ? dpDbg.cells.length : 0,
-             sgDbg ? (sgDbg.alive ? STRINGS.debug.ghostAlive
-                                  : STRINGS.debug.ghostKilled)
-                   : STRINGS.debug.fieldNone,
-             Game.level.def.gateMode || STRINGS.debug.gateModeNormal),
+             sgDbg ? (sgDbg.alive ? S().debug.ghostAlive
+                                  : S().debug.ghostKilled)
+                   : S().debug.fieldNone,
+             Game.level.def.gateMode || S().debug.gateModeNormal),
            CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yAct3,
-           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
 
   // Act 3: attempt recording + ghost diagnostics
   const geDbg = Game.ruleVars.ghostEcho;
   const lensDbg = Game.pastAttempts.map(a => a.length / 2).join(','); // debug-only
-  let ghostDbg = STRINGS.debug.ghostsNone;
+  let ghostDbg = S().debug.ghostsNone;
   if (geDbg && geDbg.ghosts.length) {
     const parts = [];
     for (let i = 0; i < geDbg.ghosts.length; i++) {
       const g = geDbg.ghosts[i];
-      parts.push(STRINGS.debug.ghostEntry(i, g.active,
+      parts.push(S().debug.ghostEntry(i, g.active,
         Math.round(g.cx), Math.round(g.cy)));
     }
     ghostDbg = parts.join(' | ');
   }
-  drawText(STRINGS.debug.ghostState(Game.attemptFrame,
+  drawText(S().debug.ghostState(Game.attemptFrame,
              Game.pastAttempts.length, lensDbg, ghostDbg),
            CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yGhost,
-           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
 
   // corner info: live rule state + active rules + deaths
-  drawText(STRINGS.debug.ruleState(Game.gravityDir, Game.keysSwapped,
+  drawText(S().debug.ruleState(Game.gravityDir, Game.keysSwapped,
            Game.lastMoveDir, Game.timeScale, Game.inputDelayOn),
            CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yState,
-           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
   const ids = Game.level.rules.slice();
-  drawText(STRINGS.debug.rules(ids), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yRules,
-           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
-  drawText(STRINGS.debug.deaths(Game.deaths), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yDeaths,
-           fontStr(CONFIG.FONTS.debug), 'left', 0.8);
+  drawText(S().debug.rules(ids), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yRules,
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
+  drawText(S().debug.deaths(Game.deaths), CONFIG.UI.debugInfo.x, CONFIG.UI.debugInfo.yDeaths,
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
+  const audio = AUDIO.debugInfo();
+  const audioLine = 'audio: ' + audio.state + ' voices: ' + audio.voices + '/' + CONFIG.AUDIO.maxVoices +
+    ' mute: ' + (audio.muted ? 'on' : 'off') + ' muffled: ' + (audio.muffled ? 'on' : 'off') +
+    ' act: ' + audio.act + ' root: ' + audio.root + 'Hz fifth: ' + audio.fifth +
+    'Hz detune: ' + audio.detune.toFixed(1) +
+    'c audition: ' + (Game.audioLastAudition || '-');
+  drawText(audioLine, CONFIG.UI.debugInfo.x, 716,
+           fontStr(activeFonts().debug), 'left', 0.8, 'ltr');
 }
 
 /* ---- HUD & overlays ---- */
 
 function drawHUD() {
-  drawText(STRINGS.hud.room(Game.levelIndex + 1, TOTAL_LEVELS),
-           CONFIG.UI.hudRoom.x, CONFIG.UI.hudRoom.y,
-           fontStr(CONFIG.FONTS.hud), 'left');
-  drawText(STRINGS.hud.deaths(Game.deaths),
-           CONFIG.UI.hudDeaths.x, CONFIG.UI.hudDeaths.y,
-           fontStr(CONFIG.FONTS.hud), 'right');
+  const ui = CONFIG.UI;
+  const mirrored = CONFIG.LANG === 'fa' && ui.mirrorHudInRtl;
+  const roomX = mirrored ? ui.hudDeaths.x : ui.hudRoom.x;
+  const roomAlign = mirrored ? 'right' : 'left';
+  const deathsX = mirrored ? ui.hudRoom.x : ui.hudDeaths.x;
+  const deathsAlign = mirrored ? 'left' : 'right';
+  drawText(S().hud.room(Game.levelIndex + 1, TOTAL_LEVELS),
+           roomX, ui.hudRoom.y, fontStr(activeFonts().hud), roomAlign);
+  drawText(S().hud.deaths(Game.deaths),
+           deathsX, ui.hudDeaths.y, fontStr(activeFonts().hud), deathsAlign);
 }
 
 // win animation (pure cosmetics): the player shrinks into the door opening
@@ -2832,23 +4323,23 @@ function drawCompleteOverlay() {
   ctx.globalAlpha = 0.72 * a;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   ctx.globalAlpha = 1;
-  drawText(STRINGS.transitions.completeTitle, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.titleYOff,
-           fontStr(CONFIG.FONTS.overlay), 'center', a);
-  drawText(STRINGS.transitions.completeSub, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.subYOff,
-           fontStr(CONFIG.FONTS.overlaySub), 'center', a);
+  drawText(S().transitions.completeTitle, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.titleYOff,
+           fontStr(activeFonts().overlay), 'center', a);
+  drawText(S().transitions.completeSub, CONFIG.UI.complete.x, VIEW_H / 2 + CONFIG.UI.complete.subYOff,
+           fontStr(activeFonts().overlaySub), 'center', a);
 }
 
 function drawEndScreen() {
   const t = Game.stateTime, U = CONFIG.UI.end;
-  drawText(STRINGS.end.title, U.x, VIEW_H / 2 + U.titleYOff,
-           fontStr(CONFIG.FONTS.endTitle), 'center');
-  drawText(STRINGS.end.sub, U.x, VIEW_H / 2 + U.subYOff,
-           fontStr(CONFIG.FONTS.endLine), 'center', 0.9);
-  drawText(STRINGS.end.deaths(Game.deaths), U.x, VIEW_H / 2 + U.deathsYOff,
-           fontStr(CONFIG.FONTS.endLine), 'center');
+  drawText(S().end.title, U.x, VIEW_H / 2 + U.titleYOff,
+           fontStr(activeFonts().endTitle), 'center');
+  drawText(S().end.sub, U.x, VIEW_H / 2 + U.subYOff,
+           fontStr(activeFonts().endLine), 'center', 0.9);
+  drawText(S().end.deaths(Game.deaths), U.x, VIEW_H / 2 + U.deathsYOff,
+           fontStr(activeFonts().endLine), 'center');
   const pulse = 0.55 + 0.35 * Math.sin(t * 0.08);
-  drawText(STRINGS.end.restart, U.x, VIEW_H / 2 + U.restartYOff,
-           fontStr(CONFIG.FONTS.endLine), 'center', pulse);
+  drawText(S().end.restart, U.x, VIEW_H / 2 + U.restartYOff,
+           fontStr(activeFonts().endLine), 'center', pulse);
 }
 
 function drawFlash() {
@@ -2859,13 +4350,41 @@ function drawFlash() {
   ctx.globalAlpha = 1;
 }
 
+function drawSoundIndicator() {
+  if (save.sound && performance.now() > Game.soundIconUntil) return;
+  const x = VIEW_W - 32, y = VIEW_H - 26;
+  ctx.save();
+  ctx.globalAlpha = 0.78;
+  ctx.fillStyle = save.sound ? COLORS.door : COLORS.danger;
+  ctx.strokeStyle = ctx.fillStyle;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 4); ctx.lineTo(x + 5, y - 4); ctx.lineTo(x + 11, y - 9);
+  ctx.lineTo(x + 11, y + 9); ctx.lineTo(x + 5, y + 4); ctx.lineTo(x, y + 4);
+  ctx.closePath(); ctx.fill();
+  if (save.sound) {
+    ctx.beginPath(); ctx.arc(x + 10, y, 7, -0.9, 0.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + 10, y, 11, -0.9, 0.9); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(x + 15, y - 7); ctx.lineTo(x + 25, y + 7);
+    ctx.moveTo(x + 25, y - 7); ctx.lineTo(x + 15, y + 7); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function render() {
+  if (Game.mode !== 'playing') {
+    renderMenuScreen();
+    drawSoundIndicator();
+    return;
+  }
   // render order: static background (offscreen act layer) -> dynamic living
   // wall -> tiles/walls/hazards -> entities -> player -> narrator pill + HUD
   drawStaticBG();
 
   if (Game.state === 'end') {
     drawEndScreen();
+    drawSoundIndicator();
     return;
   }
   drawDynamicBG();
@@ -2898,6 +4417,7 @@ function render() {
   if (Game.state === 'complete') drawCompleteOverlay();
   if (Game.state === 'complete' && winFx.started) drawWinFx(); // above the overlay
   drawFlash();
+  drawSoundIndicator();
 }
 
 /* ============================ GAME STATE ================================= */
@@ -2905,6 +4425,7 @@ function render() {
    tied to the current playthrough (paths + deaths across levels).          */
 
 const Game = {
+  mode: 'menu',         // 'menu' | 'playing' | 'levels' | 'options' | 'quitConfirm' | 'farewell'
   state: 'playing',     // 'playing' | 'complete' | 'end'
   levelIndex: 0,
   deaths: 0,            // total deaths this run (HUD counter)
@@ -2929,6 +4450,10 @@ const Game = {
   inputDelayOn: false,  // cached: current level uses the inputDelay rule
   timeScale: 1,         // room-time multiplier applied this frame (debug view)
   lastDeathCause: null,  // 'spike' | 'hazard' | 'ghost' (set at the kill site)
+  audioDeathCause: null, // audio-only cause; does not affect rule/gameplay logic
+  audioStepTimer: 0, audioStepSide: 1,
+  soundIconUntil: 0, audioLastAudition: '',
+  endChordPlayed: false,
   // --- Act 3 attempt recording (ghost system) ---
   attemptRec: [],       // flat [x0,y0,x1,y1,...] hitbox-center tape, THIS attempt
   attemptFrame: 0,      // frames since the current attempt started
@@ -2946,25 +4471,59 @@ const Game = {
 // by rules via the level's narratorEvents map.
 const Narrator = {
   current: '',
+  currentEvent: null,
   lineFor(levelIndex, context) {
-    const entry = STRINGS.levels[levelIndex + 1];
+    const entry = S().levels[levelIndex + 1];
     return entry ? entry.narrator : '';
   },
   event(game, name) {
     const map = game.level.narratorEvents;
     if (!map || !map[name]) return;
-    const events = STRINGS.levels[game.levelIndex + 1].events || {};
-    if (events[map[name]]) Narrator.current = events[map[name]];
+    const entry = S().levels[game.levelIndex + 1];
+    const events = entry ? (entry.events || {}) : {};
+    if (events[map[name]]) {
+      const next = events[map[name]];
+      if (next !== Narrator.current) AUDIO.play('narrator_tick');
+      Narrator.current = next;
+      Narrator.currentEvent = name;
+    }
+  },
+  refresh() {
+    const entry = S().levels[Game.levelIndex + 1];
+    if (!entry) { Narrator.current = ''; return; }
+    const map = Game.level && Game.level.narratorEvents;
+    const key = Narrator.currentEvent && map && map[Narrator.currentEvent];
+    Narrator.current = (key && entry.events && entry.events[key])
+      ? entry.events[key] : (entry.narrator || '');
   },
 };
+
+function setLanguage(lang) {
+  CONFIG.LANG = lang === 'en' ? 'en' : 'fa';
+  CONFIG.UI.direction = CONFIG.LANG === 'fa' ? 'rtl' : 'ltr';
+  if (document.documentElement) document.documentElement.lang = CONFIG.LANG;
+  document.title = S().title;
+  if (Game.level) Narrator.refresh();
+  save.lang = CONFIG.LANG;
+  persistSave();
+}
 
 function setState(s) {
   Game.state = s;
   Game.stateTime = 0;
 }
 
+function enterEndState() {
+  setState('end');
+  if (!Game.endChordPlayed) {
+    Game.endChordPlayed = true;
+    AUDIO.play('end_chord');
+  }
+}
+
 // attempt start: fresh narrator line + per-attempt rule state
 function attemptStart(game) {
+  Narrator.currentEvent = null;
   Narrator.current = Narrator.lineFor(game.levelIndex, game);
   for (const rule of game.activeRules) {
     if (rule.onAttemptStart) rule.onAttemptStart(game);
@@ -3016,6 +4575,7 @@ function loadLevel(index) {
   Game.door = { x: parsed.door.tx * TILE, y: parsed.door.ty * TILE, w: TILE, h: TILE };
   Game.justJumped = false;
   Game.lastDeathCause = null;
+  Game.audioDeathCause = null;
   Game.activeRules = def.rules
     .map(id => RULES[id] || console.warn('Unknown rule id:', id))
     .filter(Boolean);
@@ -3035,6 +4595,7 @@ function loadLevel(index) {
   }
   attemptStart(Game);
   setState('playing');
+  AUDIO.play('room');
 }
 
 // Back to the spawn point. died=true counts a death + effects; died=false is
@@ -3053,7 +4614,12 @@ function restartAttempt(died) {
       if (rule.onDeath) rule.onDeath(Game);
     }
     Game.deaths++;
+    const tallyBefore = Math.min(Game.levelDeaths + bgFakeTally, CONFIG.BG.tally.max);
     Game.levelDeaths++;
+    const tallyAfter = Math.min(Game.levelDeaths + bgFakeTally, CONFIG.BG.tally.max);
+    if (CONFIG.AUDIO.tallyScratch && tallyAfter > tallyBefore)
+      AUDIO.play('tally_scratch', { delay: 0.14 });
+    recordSavedDeath(Game.levelIndex);
     Game.flash = FLASH_FRAMES;
     Game.freeze = DEATH_FREEZE_FRAMES;
     spawnDeathBurst(player.x + player.w / 2, player.y + player.h / 2);
@@ -3068,6 +4634,13 @@ function restartAttempt(died) {
 }
 
 function onPlayerDeath() {
+  const cause = Game.audioDeathCause ||
+    (Game.lastDeathCause === 'ghost' ? 'ghost' : 'generic');
+  const sound = cause === 'spike' ? 'death_spike'
+    : cause === 'lava' ? 'death_lava'
+    : cause === 'ghost' ? 'death_ghost' : 'death';
+  AUDIO.play(sound, { pan: audioPanForX(player.x + player.w / 2) });
+  Game.audioDeathCause = null;
   restartAttempt(true);
 }
 
@@ -3077,9 +4650,14 @@ function onPlayerDeath() {
 let winFx = { started: false, t0: 0, x0: 0, y0: 0 };
 
 function onPlayerWin() {
-  // save THIS attempt's path before the next level loads — BEFORE any win FX
-  // state, so recording is independent of visuals (order unchanged)
+  AUDIO.play('portal', {
+    duration: (CONFIG.DOOR.winShrinkFrames + CONFIG.DOOR.winRingFrames) * STEP_MS / 1000,
+    pan: audioPanForX(Game.door.x + Game.door.w / 2),
+  });
+  // Save the path and progression before the next level loads; the persisted
+  // tile route is used when a player later starts a level directly.
   Game.run.lastWinPath = Game.run.currentPath.slice();
+  recordSavedWin(Game.levelIndex, Game.run.currentPath);
   if (CONFIG.DOOR.winAnim)              // visual-only win effect (default on)
     winFx = { started: true, t0: 0, x0: player.x, y0: player.y };
   // note: t0 is 0 because setState('complete') above resets stateTime to 0;
@@ -3093,6 +4671,7 @@ function onPlayerWin() {
 function resetRun() {
   Game.deaths = 0;
   Game.attempt = 1;
+  Game.endChordPlayed = false;
   Game.run.currentPath = [];
   Game.run.lastWinPath = [];
   Game.run.deathPoints = [];
@@ -3100,19 +4679,762 @@ function resetRun() {
   loadLevel(0);
 }
 
+function debugLoadLevel(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= LEVELS.length) return false;
+  if (dependsOnPrevious(index + 1)) {
+    let prior = priorPathForLevel(index);
+    if (!prior.length && Game.levelIndex === index - 1 && Game.run.currentPath.length)
+      prior = Game.run.currentPath.slice();
+    Game.run.lastWinPath = prior;
+  }
+  loadLevel(index);
+  return true;
+}
+
+const Menu = {
+  screen: 'main',
+  origin: 'initial', // initial | paused | end
+  selected: 0,
+  narrator: '',
+  dependencyPendingIndex: null,
+  dependencyDeadline: 0,
+};
+
+const MENU_MAIN_ITEMS = ['continue', 'start', 'levels', 'options', 'quit'];
+
+function toggleSoundSetting() {
+  save.sound = !save.sound;
+  persistSave();
+  AUDIO.setMuted(!save.sound);
+  Game.soundIconUntil = performance.now() + 1500;
+  if (save.sound) AUDIO.play('mute_blip');
+  if (Game.mode === 'options' && Menu.selected === 2)
+    Menu.narrator = save.sound ? S().menu.nSoundOn : S().menu.nSoundOff;
+}
+
+function clearInputState() {
+  Input.left = Input.right = Input.jumpHeld = false;
+  Input.jumpPressed = Input.jumpReleased = Input.restartPressed = false;
+  Input.debugToggle = Input.debugSkip = Input.debugPrev = Input.debugNext = false;
+  Input.debugDigit = 0;
+  Input.languageToggle = Input.tallyToggle = false;
+}
+
+function resetLoopClock() {
+  accumulator = 0;
+  lastTime = performance.now();
+}
+
+function toggleFullscreen() {
+  try {
+    let result = null;
+    if (document.fullscreenElement) {
+      if (document.exitFullscreen) result = document.exitFullscreen();
+    } else if (canvas.requestFullscreen) {
+      result = canvas.requestFullscreen();
+    }
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch (e) {
+    // Fullscreen can be unavailable in restricted browser/iframe contexts.
+  }
+}
+
+function openMainMenu(origin) {
+  clearInputState();
+  AUDIO.play('ui_open');
+  Menu.dependencyPendingIndex = null;
+  Menu.dependencyDeadline = 0;
+  Menu.origin = origin || 'initial';
+  Menu.screen = 'main';
+  Menu.selected = 0;
+  Menu.narrator = origin === 'paused' ? S().menu.nContinue : '';
+  Game.mode = 'menu';
+  resetLoopClock();
+}
+
+function openMenu() {
+  if (Game.mode !== 'playing') return;
+  if (Game.state === 'end') {
+    openMainMenu('end');
+    return;
+  }
+  if (Game.state === 'playing') {
+    setSavedCurrent(Game.levelIndex);
+    persistSave();
+  }
+  openMainMenu('paused');
+}
+
+function returnToMainMenu() {
+  const farewell = S().menu.nFarewell;
+  const origin = Menu.origin || 'initial';
+  openMainMenu(origin);
+  Menu.narrator = farewell;
+}
+
+function enterMenuScreen(screen) {
+  clearInputState();
+  if (screen === 'main') {
+    Menu.dependencyPendingIndex = null;
+    Menu.dependencyDeadline = 0;
+    AUDIO.play('ui_back');
+  } else if (screen !== Game.mode) AUDIO.play('ui_open');
+  Menu.screen = screen;
+  Game.mode = screen === 'main' ? 'menu' : screen;
+  resetLoopClock();
+}
+
+function mainItemNarrator(index) {
+  const m = S().menu;
+  const lines = [m.nContinue, m.nStart, m.nLevels, m.nOptions, m.nQuit];
+  return lines[index] || '';
+}
+
+function isLevelUnlocked(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= LEVELS.length) return false;
+  return CONFIG.UNLOCK_ALL || index + 1 <= save.highest;
+}
+
+function levelMenuNarrator(index) {
+  if (dependsOnPrevious(index + 1)) return S().menu.nDepends;
+  return isLevelUnlocked(index) ? S().menu.nLevels : S().menu.nLocked;
+}
+
+function beginDependencyRedirect(index) {
+  Menu.selected = index;
+  Menu.narrator = S().menu.nDepends;
+  Menu.dependencyPendingIndex = index;
+  Menu.dependencyDeadline = performance.now() + 900;
+  clearInputState();
+  AUDIO.play('ui_depends');
+}
+
+function updateMenuDependencyWait(now) {
+  if (Menu.dependencyPendingIndex === null || document.hidden ||
+      now < Menu.dependencyDeadline) return;
+  const requested = Menu.dependencyPendingIndex;
+  Menu.dependencyPendingIndex = null;
+  Menu.dependencyDeadline = 0;
+  startAtLevel(precedingNonDependentIndex(requested));
+}
+
+function mainItemRect(index) {
+  const M = CONFIG.MENU;
+  return {
+    x: (VIEW_W - M.itemW) / 2,
+    y: M.itemStartY - M.itemH / 2 + index * M.itemGap,
+    w: M.itemW,
+    h: M.itemH,
+  };
+}
+
+function levelCellRect(index) {
+  const M = CONFIG.MENU;
+  const cols = M.levelsCols;
+  const totalW = cols * M.cellSize + (cols - 1) * M.cellGap;
+  const visualCol = CONFIG.LANG === 'fa' ? cols - 1 - (index % cols) : index % cols;
+  const row = Math.floor(index / cols);
+  return {
+    x: (VIEW_W - totalW) / 2 + visualCol * (M.cellSize + M.cellGap),
+    y: M.levelsStartY + row * (M.cellSize + M.cellGap),
+    w: M.cellSize,
+    h: M.cellSize,
+  };
+}
+
+function optionsLanguageRect(language) {
+  const rtl = CONFIG.LANG === 'fa';
+  const center = language === 'en'
+    ? (rtl ? VIEW_W * 0.64 : VIEW_W * 0.36)
+    : (rtl ? VIEW_W * 0.36 : VIEW_W * 0.64);
+  return { x: center - 170, y: CONFIG.MENU.optionsStartY - 8,
+           w: 340, h: 64 };
+}
+
+function optionsSoundRect() {
+  return { x: VIEW_W / 2 - 170, y: 414, w: 340, h: 64 };
+}
+
+function quitChoiceRect(index) {
+  const M = CONFIG.MENU;
+  const centerX = index === 0 ? VIEW_W / 2 - 150 : VIEW_W / 2 + 150;
+  return { x: centerX - M.quitItemW / 2,
+           y: M.quitStartY - M.quitItemH / 2 + index * M.quitGap,
+           w: M.quitItemW, h: M.quitItemH };
+}
+
+function backButtonRect(y) {
+  return { x: (VIEW_W - 300) / 2, y: y - 28, w: 300, h: 56 };
+}
+
+function startAtLevel(index, options) {
+  const opts = options || {};
+  if (!isLevelUnlocked(index)) {
+    Menu.narrator = S().menu.nLocked;
+    return false;
+  }
+  if (dependsOnPrevious(index + 1) && !opts.allowDependent) {
+    Menu.narrator = S().menu.nDepends;
+    return false;
+  }
+  const previous = Array.isArray(opts.priorPath) ? opts.priorPath.slice() : [];
+  Game.deaths = 0;
+  Game.attempt = 1;
+  Game.endChordPlayed = false;
+  Game.run.currentPath = [];
+  Game.run.lastWinPath = previous;
+  Game.run.deathPoints = [];
+  Game.run.pathTick = 0;
+  setSavedCurrent(index);
+  persistSave();
+  Menu.screen = 'main';
+  Menu.dependencyPendingIndex = null;
+  clearInputState();
+  AUDIO.play('ui_close');
+  AUDIO.setMuffled(false);
+  loadLevel(index);
+  Game.mode = 'playing';
+  resetLoopClock();
+  return true;
+}
+
+function continueFromMenu() {
+  if (Menu.origin === 'paused' && Game.state !== 'end') {
+    Menu.narrator = S().menu.nContinue;
+    clearInputState();
+    AUDIO.play('ui_close');
+    AUDIO.setMuffled(false);
+    Game.mode = 'playing';
+    resetLoopClock();
+    return;
+  }
+  const highestPlayable = Math.max(1, Math.min(LEVELS.length,
+    Number(save.highest) || 1));
+  const index = Math.max(0, Math.min(LEVELS.length - 1, highestPlayable - 1,
+    (Number(save.current) || 1) - 1));
+  if (dependsOnPrevious(index + 1)) {
+    if (canContinueDependent(index)) {
+      return startAtLevel(index, {
+        allowDependent: true,
+        priorPath: savedTilesToPath(save.tiles[index - 1]),
+      });
+    }
+    return startAtLevel(precedingNonDependentIndex(index));
+  }
+  return startAtLevel(index);
+}
+
+function activateMainSelection(index) {
+  Menu.selected = index;
+  AUDIO.play('ui_select');
+  Menu.narrator = mainItemNarrator(index);
+  switch (index) {
+    case 0: continueFromMenu(); break;
+    case 1: startAtLevel(0); break;
+    case 2:
+      Menu.selected = Math.max(0, Math.min(CONFIG.TOTAL_LEVELS - 1,
+        (Number(save.current) || 1) - 1));
+      enterMenuScreen('levels');
+      Menu.narrator = levelMenuNarrator(Menu.selected);
+      break;
+    case 3:
+      Menu.selected = CONFIG.LANG === 'en' ? 0 : 1;
+      enterMenuScreen('options');
+      Menu.narrator = S().menu.nOptions;
+      break;
+    case 4:
+      Menu.selected = 1; // default to No
+      enterMenuScreen('quitConfirm');
+      Menu.narrator = S().menu.nQuit;
+      break;
+  }
+}
+
+function activateLevelSelection(index) {
+  Menu.selected = index;
+  if (!isLevelUnlocked(index)) {
+    Menu.narrator = S().menu.nLocked;
+    AUDIO.play('ui_locked');
+    return;
+  }
+  if (dependsOnPrevious(index + 1)) {
+    AUDIO.play('ui_select');
+    beginDependencyRedirect(index);
+    return;
+  }
+  AUDIO.play('ui_select');
+  startAtLevel(index);
+}
+
+function chooseLanguage(lang) {
+  const next = lang === 'en' ? 'en' : 'fa';
+  AUDIO.play(CONFIG.LANG === next ? 'ui_select' : 'ui_lang');
+  setLanguage(next);
+  Menu.selected = next === 'en' ? 0 : 1;
+  Menu.narrator = S().menu.nLanguage;
+}
+
+function activateMenuSelection() {
+  switch (Game.mode) {
+    case 'menu':
+      activateMainSelection(Menu.selected);
+      return;
+    case 'levels':
+      activateLevelSelection(Menu.selected);
+      return;
+    case 'options':
+      if (Menu.selected === 0) chooseLanguage('en');
+      else if (Menu.selected === 1) chooseLanguage('fa');
+      else if (Menu.selected === 2) {
+        AUDIO.play('ui_select');
+        toggleSoundSetting();
+      } else {
+        enterMenuScreen('main');
+        Menu.selected = 3;
+        Menu.narrator = S().menu.nOptions;
+      }
+      return;
+    case 'quitConfirm':
+      if (Menu.selected === 0) {
+        AUDIO.play('ui_yes');
+        Menu.narrator = S().menu.nYes;
+        Menu.screen = 'farewell';
+        Game.mode = 'farewell';
+      } else {
+        AUDIO.play('ui_no');
+        enterMenuScreen('main');
+        Menu.selected = 4;
+        Menu.narrator = S().menu.nNo;
+      }
+      return;
+  }
+}
+
+function changeMenuSelection(delta, count) {
+  const previous = Menu.selected;
+  Menu.selected = (Menu.selected + delta + count) % count;
+  if (Menu.selected !== previous) AUDIO.play('ui_move');
+  if (Game.mode === 'menu') Menu.narrator = mainItemNarrator(Menu.selected);
+  else if (Game.mode === 'levels') Menu.narrator = levelMenuNarrator(Menu.selected);
+  else if (Game.mode === 'options')
+    Menu.narrator = Menu.selected === 2 ? S().menu.nSound
+      : Menu.selected === 3 ? S().menu.nOptions : S().menu.nLanguage;
+  else if (Game.mode === 'quitConfirm') Menu.narrator = S().menu.nReally;
+}
+
+function handleMenuKeyDown(e) {
+  if (Menu.dependencyPendingIndex !== null) return true;
+  const code = e.code;
+  if (Game.mode === 'farewell') {
+    returnToMainMenu();
+    return true;
+  }
+  if (code === 'Escape' || code === 'Backspace') {
+    if (Game.mode === 'menu') {
+      if (Menu.origin === 'paused') continueFromMenu();
+    } else if (Game.mode === 'quitConfirm') {
+      enterMenuScreen('main');
+      Menu.selected = 4;
+      Menu.narrator = S().menu.nNo;
+    } else {
+      const previousMode = Game.mode;
+      enterMenuScreen('main');
+      Menu.selected = previousMode === 'levels' ? 2 : 3;
+      Menu.narrator = previousMode === 'levels' ? S().menu.nLevels : S().menu.nOptions;
+    }
+    return true;
+  }
+  if (code === 'Enter' || code === 'Space') {
+    activateMenuSelection();
+    return true;
+  }
+
+  const up = code === 'ArrowUp' || code === 'KeyW';
+  const down = code === 'ArrowDown' || code === 'KeyS';
+  const left = code === 'ArrowLeft' || code === 'KeyA';
+  const right = code === 'ArrowRight' || code === 'KeyD';
+
+  if (Game.mode === 'menu') {
+    if (up) changeMenuSelection(-1, MENU_MAIN_ITEMS.length);
+    else if (down) changeMenuSelection(1, MENU_MAIN_ITEMS.length);
+    else return false;
+    return true;
+  }
+  if (Game.mode === 'levels') {
+    const cols = CONFIG.MENU.levelsCols;
+    let next = Menu.selected;
+    if (up) next -= cols;
+    else if (down) next += cols;
+    else if (left) next += CONFIG.LANG === 'fa' ? 1 : -1;
+    else if (right) next += CONFIG.LANG === 'fa' ? -1 : 1;
+    else return false;
+    const previous = Menu.selected;
+    Menu.selected = Math.max(0, Math.min(CONFIG.TOTAL_LEVELS - 1, next));
+    if (Menu.selected !== previous) AUDIO.play('ui_move');
+    Menu.narrator = levelMenuNarrator(Menu.selected);
+    return true;
+  }
+  if (Game.mode === 'options') {
+    if (up || down) changeMenuSelection(up ? -1 : 1, 4);
+    else if (left || right) {
+      if (Menu.selected === 2) {
+        AUDIO.play('ui_select');
+        toggleSoundSetting();
+      } else {
+        const previous = Menu.selected;
+        Menu.selected = previous === 3 ? (left ? 0 : 1) : (previous === 0 ? 1 : 0);
+        if (Menu.selected !== previous) AUDIO.play('ui_move');
+        chooseLanguage(Menu.selected === 0 ? 'en' : 'fa');
+      }
+    } else return false;
+    return true;
+  }
+  if (Game.mode === 'quitConfirm') {
+    if (left || right) changeMenuSelection(left ? -1 : 1, 2);
+    else if (up || down) changeMenuSelection(up ? -1 : 1, 2);
+    else return false;
+    return true;
+  }
+  return false;
+}
+
+function pointInRect(p, r) {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+function canvasPoint(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * VIEW_W / rect.width,
+    y: (e.clientY - rect.top) * VIEW_H / rect.height,
+  };
+}
+
+function menuHitAt(p) {
+  if (Game.mode === 'menu') {
+    for (let i = 0; i < MENU_MAIN_ITEMS.length; i++)
+      if (pointInRect(p, mainItemRect(i))) return { kind: 'main', index: i };
+  } else if (Game.mode === 'levels') {
+    for (let i = 0; i < CONFIG.TOTAL_LEVELS; i++)
+      if (pointInRect(p, levelCellRect(i))) return { kind: 'level', index: i };
+    if (pointInRect(p, backButtonRect(CONFIG.MENU.levelsBackY)))
+      return { kind: 'backLevels' };
+  } else if (Game.mode === 'options') {
+    if (pointInRect(p, optionsLanguageRect('en'))) return { kind: 'language', lang: 'en' };
+    if (pointInRect(p, optionsLanguageRect('fa'))) return { kind: 'language', lang: 'fa' };
+    if (pointInRect(p, optionsSoundRect())) return { kind: 'sound' };
+    if (pointInRect(p, backButtonRect(CONFIG.MENU.optionsBackY)))
+      return { kind: 'backOptions' };
+  } else if (Game.mode === 'quitConfirm') {
+    for (let i = 0; i < 2; i++)
+      if (pointInRect(p, quitChoiceRect(i))) return { kind: 'quit', index: i };
+  }
+  return null;
+}
+
+function onCanvasMove(e) {
+  if (Game.mode === 'playing' || Game.mode === 'farewell' ||
+      Menu.dependencyPendingIndex !== null) return;
+  const hit = menuHitAt(canvasPoint(e));
+  if (!hit) return;
+  if (hit.kind === 'main') {
+    if (Menu.selected !== hit.index) AUDIO.play('ui_move');
+    Menu.selected = hit.index;
+    Menu.narrator = mainItemNarrator(hit.index);
+  } else if (hit.kind === 'level') {
+    if (Menu.selected !== hit.index) AUDIO.play('ui_move');
+    Menu.selected = hit.index;
+    Menu.narrator = levelMenuNarrator(hit.index);
+  } else if (hit.kind === 'language') {
+    const selected = hit.lang === 'en' ? 0 : 1;
+    if (Menu.selected !== selected) AUDIO.play('ui_move');
+    Menu.selected = selected;
+    Menu.narrator = S().menu.nLanguage;
+  } else if (hit.kind === 'sound') {
+    if (Menu.selected !== 2) AUDIO.play('ui_move');
+    Menu.selected = 2;
+    Menu.narrator = S().menu.nSound;
+  } else if (hit.kind === 'quit') {
+    if (Menu.selected !== hit.index) AUDIO.play('ui_move');
+    Menu.selected = hit.index;
+    Menu.narrator = S().menu.nReally;
+  }
+}
+
+function onCanvasClick(e) {
+  if (Menu.dependencyPendingIndex !== null) return;
+  if (Game.mode === 'farewell') {
+    returnToMainMenu();
+    return;
+  }
+  if (Game.mode === 'playing' && Game.state === 'end') {
+    openMainMenu('end');
+    return;
+  }
+  if (Game.mode === 'playing') return;
+  const hit = menuHitAt(canvasPoint(e));
+  if (!hit) return;
+  if (hit.kind === 'main') activateMainSelection(hit.index);
+  else if (hit.kind === 'level') activateLevelSelection(hit.index);
+  else if (hit.kind === 'language') chooseLanguage(hit.lang);
+  else if (hit.kind === 'sound') {
+    Menu.selected = 2;
+    AUDIO.play('ui_select');
+    toggleSoundSetting();
+  }
+  else if (hit.kind === 'quit') {
+    Menu.selected = hit.index;
+    activateMenuSelection();
+  } else if (hit.kind === 'backLevels' || hit.kind === 'backOptions') {
+    enterMenuScreen('main');
+    Menu.selected = hit.kind === 'backLevels' ? 2 : 3;
+    Menu.narrator = hit.kind === 'backLevels' ? S().menu.nLevels : S().menu.nOptions;
+  }
+}
+
+function drawMenuText(text, x, y, font, align, color, alpha, direction) {
+  ctx.save();
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.font = font;
+  ctx.direction = direction || CONFIG.UI.direction;
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = color || CONFIG.MENU.colors.normalText;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function drawMenuButton(text, rect, selected, active, font) {
+  const C = CONFIG.MENU.colors;
+  ctx.save();
+  roundedRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+  ctx.fillStyle = selected || active ? C.selectedFill : 'rgba(27,29,43,0.82)';
+  ctx.fill();
+  ctx.lineWidth = selected ? 2 : 1;
+  ctx.strokeStyle = selected || active ? C.selectedOutline : 'rgba(207,211,230,0.22)';
+  ctx.stroke();
+  ctx.restore();
+  drawMenuText(text, rect.x + rect.w / 2, rect.y + rect.h * 0.67,
+    font || fontStr(activeFonts().menuItem), 'center',
+    selected ? C.selectedText : C.normalText);
+}
+
+function drawMenuBackdrop() {
+  const background = BACKGROUNDS[CONFIG.MENU.bgAct] || BACKGROUNDS[1];
+  if (bgAct === CONFIG.MENU.bgAct) drawStaticBG();
+  else {
+    ctx.save();
+    if (background.drawStatic) background.drawStatic(ctx, VIEW_W, VIEW_H);
+    ctx.restore();
+  }
+  if (Game.level && background.drawDynamic)
+    background.drawDynamic(ctx, Game, Game.stateTime);
+  ctx.save();
+  ctx.fillStyle = 'rgba(10,11,16,0.62)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.restore();
+  drawSavedDeathTally();
+}
+
+function drawSavedDeathTally() {
+  const T = CONFIG.MENU.tally;
+  const n = Math.min(Math.max(0, Number(save.total) || 0), T.max);
+  if (n > 0) {
+    ctx.save();
+    ctx.strokeStyle = T.color;
+    ctx.globalAlpha = T.alpha;
+    ctx.lineWidth = T.strokeW;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const group = Math.floor(i / 5), inner = i % 5;
+      const row = Math.floor(group / T.groupsPerRow), col = group % T.groupsPerRow;
+      const gx = T.x + col * T.groupGap, gy = T.y + row * T.rowGap;
+      ctx.beginPath();
+      if (inner < 4) {
+        const x = gx + 6 + inner * T.strokeGap;
+        ctx.moveTo(x, gy);
+        ctx.lineTo(x + (inner % 2 ? 1 : -1), gy + T.strokeLen);
+      } else {
+        ctx.moveTo(gx + 2, gy + T.strokeLen);
+        ctx.lineTo(gx + 32, gy - 3);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  drawMenuText(S().menu.totalDeaths(playerNumber(save.total)),
+    T.x + T.w / 2, T.captionY, fontStr(activeFonts().menuSmall), 'center',
+    CONFIG.MENU.colors.normalText);
+}
+
+function drawMenuNarrator(y) {
+  if (!Menu.narrator) return;
+  const width = 640, h = 34, x = (VIEW_W - width) / 2;
+  ctx.save();
+  roundedRectPath(ctx, x, y - h + 3, width, h, 12);
+  ctx.fillStyle = 'rgba(20,22,31,0.82)';
+  ctx.fill();
+  ctx.restore();
+  drawMenuText(Menu.narrator, VIEW_W / 2, y - 7,
+    fontStr(activeFonts().menuSubtitle), 'center', CONFIG.MENU.colors.normalText);
+}
+
+function drawMainMenu() {
+  const M = CONFIG.MENU, m = S().menu;
+  drawMenuText(m.title, VIEW_W / 2, M.titleY,
+    fontStr(activeFonts().menuTitle), 'center', CONFIG.MENU.colors.selectedText);
+  const labels = [m.continue, m.start, m.levels, m.options, m.quit];
+  for (let i = 0; i < labels.length; i++) {
+    const r = mainItemRect(i);
+    drawMenuButton(labels[i], r, Menu.selected === i, false);
+    if (i === 0) {
+      const sub = m.continueSub(playerNumber(save.current), playerNumber(save.total));
+      drawMenuText(sub, VIEW_W / 2, r.y + r.h - 6,
+        fontStr(activeFonts().menuSmall), 'center', CONFIG.MENU.colors.normalText, 0.9);
+    }
+  }
+  drawMenuNarrator(M.itemStartY - 52);
+}
+
+function drawLockIcon(r) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(207,211,230,0.55)';
+  ctx.fillStyle = 'rgba(207,211,230,0.55)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(r.x + r.w - 16, r.y + 15, 5, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillRect(r.x + r.w - 22, r.y + 15, 12, 10);
+  ctx.restore();
+}
+
+function drawLevelGrid() {
+  const M = CONFIG.MENU, C = M.colors;
+  for (let i = 0; i < CONFIG.TOTAL_LEVELS; i++) {
+    const r = levelCellRect(i), unlocked = isLevelUnlocked(i);
+    const completed = !!save.done[i];
+    ctx.save();
+    roundedRectPath(ctx, r.x, r.y, r.w, r.h, 10);
+    if (unlocked) ctx.fillStyle = Menu.selected === i ? C.selectedCellFill : 'rgba(43,47,69,0.78)';
+    else ctx.fillStyle = Menu.selected === i ? C.lockedSelectedFill : C.lockedFill;
+    ctx.fill();
+    ctx.lineWidth = Menu.selected === i ? 2 : 1;
+    ctx.strokeStyle = Menu.selected === i ? C.selectedOutline : 'rgba(207,211,230,0.18)';
+    ctx.stroke();
+    ctx.restore();
+
+    drawMenuText(playerNumber(i + 1), r.x + r.w / 2, r.y + 43,
+      fontStr(activeFonts().menuCell), 'center',
+      unlocked ? C.cellText : 'rgba(207,211,230,0.48)');
+    if (dependsOnPrevious(i + 1)) {
+      ctx.save();
+      ctx.globalAlpha = unlocked ? 0.78 : 0.38;
+      ctx.fillStyle = C.check;
+      for (let dot = 0; dot < 3; dot++) {
+        ctx.beginPath(); ctx.arc(r.x + 14 + dot * 7, r.y + 12, 1.8, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+    if (!unlocked) drawLockIcon(r);
+    if (completed) {
+      ctx.save();
+      ctx.strokeStyle = C.check;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(r.x + 12, r.y + r.h - 18);
+      ctx.lineTo(r.x + 19, r.y + r.h - 11);
+      ctx.lineTo(r.x + 31, r.y + r.h - 25);
+      ctx.stroke();
+      ctx.restore();
+    }
+    const deaths = Number(save.deaths[i]) || 0;
+    if (deaths > 0) drawMenuText(playerNumber(deaths), r.x + r.w - 10, r.y + r.h - 8,
+      fontStr(activeFonts().menuSmall), 'right', C.death);
+  }
+}
+
+function drawLevelsScreen() {
+  const M = CONFIG.MENU, m = S().menu;
+  drawMenuText(m.levels, VIEW_W / 2, M.levelsTitleY,
+    fontStr(activeFonts().menuSection), 'center', CONFIG.MENU.colors.selectedText);
+  drawMenuNarrator(146);
+  drawLevelGrid();
+  drawMenuButton(m.back, backButtonRect(M.levelsBackY), false, false,
+    fontStr(activeFonts().menuSubtitle));
+}
+
+function drawOptionsScreen() {
+  const M = CONFIG.MENU, m = S().menu;
+  drawMenuText(m.options, VIEW_W / 2, M.optionsHeaderY,
+    fontStr(activeFonts().menuSection), 'center', CONFIG.MENU.colors.selectedText);
+  drawMenuNarrator(M.optionsStartY - 40);
+  drawMenuText(m.language, VIEW_W / 2, M.optionsStartY - 18,
+    fontStr(activeFonts().menuSubtitle), 'center', CONFIG.MENU.colors.normalText);
+  const en = optionsLanguageRect('en'), fa = optionsLanguageRect('fa');
+  drawMenuButton(m.languageEnglish, en, Menu.selected === 0, CONFIG.LANG === 'en',
+    fontStr(activeFonts().menuItem));
+  drawMenuButton(m.languagePersian, fa, Menu.selected === 1, CONFIG.LANG === 'fa',
+    fontStr(activeFonts().menuItem));
+  const soundRect = optionsSoundRect();
+  drawMenuText(m.sound, VIEW_W / 2, soundRect.y - 8,
+    fontStr(activeFonts().menuSubtitle), 'center', CONFIG.MENU.colors.normalText);
+  drawMenuButton(save.sound ? m.on : m.off, soundRect, Menu.selected === 2, false,
+    fontStr(activeFonts().menuItem));
+  drawMenuButton(m.back, backButtonRect(M.optionsBackY), Menu.selected === 3, false,
+    fontStr(activeFonts().menuSubtitle));
+}
+
+function drawQuitConfirmScreen() {
+  const M = CONFIG.MENU, m = S().menu;
+  drawMenuText(m.really, VIEW_W / 2, M.quitQuestionY,
+    fontStr(activeFonts().menuConfirm), 'center', CONFIG.MENU.colors.selectedText);
+  drawMenuNarrator(M.quitQuestionY + 76);
+  drawMenuButton(m.yes, quitChoiceRect(0), Menu.selected === 0, false);
+  drawMenuButton(m.no, quitChoiceRect(1), Menu.selected === 1, false);
+}
+
+function drawFarewellScreen() {
+  const m = S().menu;
+  const line = m.nFarewell;
+  drawMenuNarrator(VIEW_H / 2 - 54);
+  drawMenuText(line, VIEW_W / 2, VIEW_H / 2 + 10,
+    fontStr(activeFonts().menuConfirm), 'center', CONFIG.MENU.colors.selectedText);
+  drawMenuText(m.farewellHint, VIEW_W / 2, CONFIG.MENU.farewellHintY,
+    fontStr(activeFonts().menuHint), 'center', CONFIG.MENU.colors.normalText);
+}
+
+function renderMenuScreen() {
+  drawMenuBackdrop();
+  if (Game.mode === 'farewell') {
+    drawFarewellScreen();
+    return;
+  }
+  if (Game.mode === 'levels') drawLevelsScreen();
+  else if (Game.mode === 'options') drawOptionsScreen();
+  else if (Game.mode === 'quitConfirm') drawQuitConfirmScreen();
+  else drawMainMenu();
+}
+
+canvas.addEventListener('mousemove', onCanvasMove);
+canvas.addEventListener('click', onCanvasClick);
+
+
 // One fixed update (1/60 s).
 function update() {
+  if (Game.mode !== 'playing') return;
   Game.stateTime++;
   if (Game.flash > 0) Game.flash--;
 
   // F2 toggles debug mode
   if (Input.debugToggle) {
     Game.debug = !Game.debug;
-    if (!Game.debug) { persianSmoke = false; bgFakeTally = 0; } // debug-only visuals reset
+    if (!Game.debug) bgFakeTally = 0; // debug-only visual reset
   }
 
-  // P toggles the Persian smoke-test string in the narrator slot (debug only)
-  if (Input.persianToggle && Game.debug) persianSmoke = !persianSmoke;
+  // L toggles the display language only while debug mode is active.
+  if (Input.languageToggle && Game.debug)
+    setLanguage(CONFIG.LANG === 'fa' ? 'en' : 'fa');
 
   // K adds 5 fake tally marks to the living wall (debug only, visual only —
   // the real death counters are not touched)
@@ -3122,12 +5444,12 @@ function update() {
   // debug-only level jumps: N / ']' = next, '[' = previous, 1..9 = jump to room
   if (Game.debug && Game.state === 'playing') {
     if (Input.debugSkip || Input.debugNext) {
-      if (Game.levelIndex + 1 < LEVELS.length) loadLevel(Game.levelIndex + 1);
-      else setState('end');
+      if (Game.levelIndex + 1 < LEVELS.length) debugLoadLevel(Game.levelIndex + 1);
+      else enterEndState();
     } else if (Input.debugPrev) {
-      if (Game.levelIndex > 0) loadLevel(Game.levelIndex - 1);
+      if (Game.levelIndex > 0) debugLoadLevel(Game.levelIndex - 1);
     } else if (Input.debugDigit >= 1 && Input.debugDigit <= LEVELS.length) {
-      loadLevel(Input.debugDigit - 1);
+      debugLoadLevel(Input.debugDigit - 1);
     }
   }
 
@@ -3155,7 +5477,7 @@ function update() {
     case 'complete':
       if (Game.stateTime >= COMPLETE_FRAMES) {
         if (Game.levelIndex + 1 < LEVELS.length) loadLevel(Game.levelIndex + 1);
-        else setState('end'); // only the rooms above exist so far
+        else enterEndState(); // only the rooms above exist so far
       }
       break;
     case 'end':
@@ -3173,7 +5495,7 @@ function update() {
   Input.debugDigit = 0;
   Input.debugPrev = false;
   Input.debugNext = false;
-  Input.persianToggle = false;
+  Input.languageToggle = false;
   Input.tallyToggle = false;
 }
 
@@ -3187,7 +5509,21 @@ let accumulator = 0;
 function frame(now) {
   let delta = now - lastTime;
   lastTime = now;
-  if (delta > 250) delta = 250; // tab was hidden etc.: don't fast-forward
+  AUDIO.update(Game, Math.max(0, Math.min(delta, 250)) / 1000);
+  if (!document.hidden) updateMenuDependencyWait(now);
+  if (document.hidden) {
+    accumulator = 0;
+    render();
+    requestAnimationFrame(frame);
+    return;
+  }
+  if (Game.mode !== 'playing') {
+    accumulator = 0; // menus pause the game completely
+    render();
+    requestAnimationFrame(frame);
+    return;
+  }
+  if (delta > 250) delta = 250; // long frame: don't fast-forward
   // room-time scale: a rule with getTimeScale() (speedByDoorDistance) speeds
   // or slows simulated time; default is exactly 1 (levels 1-11 unchanged).
   // Physics constants per fixed step are the same; rendering stays real-time.
@@ -3210,7 +5546,18 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+document.addEventListener('visibilitychange', () => {
+  clearInputState();
+  accumulator = 0;
+  lastTime = performance.now(); // hidden time never advances gameplay
+});
+
+setLanguage(save.lang);
 loadLevel(0);
+Game.mode = 'menu';
+Menu.screen = 'main';
+Menu.origin = 'initial';
+Menu.selected = 0;
 requestAnimationFrame(frame);
 </script>
 </body>
