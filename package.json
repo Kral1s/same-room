@@ -1,0 +1,44 @@
+{
+  "name": "same-room",
+  "productName": "SameRoom",
+  "version": "1.0.0",
+  "description": "Same Room",
+  "main": "main.js",
+  "private": true,
+  "author": "Same Room Team",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.8.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.samegame.sameroom",
+    "productName": "SameRoom",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "package.json"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "SameRoom.exe",
+      "icon": "build/icon.png"
+    }
+  }
+}

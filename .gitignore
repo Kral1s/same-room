@@ -2,6 +2,10 @@
 .github_token
 .push-to-github.sh
 
+# Electron dependencies and build output
+node_modules/
+dist/
+
 # OS junk
 .DS_Store
 Thumbs.db
